@@ -53,3 +53,4 @@ Research question for the final write-up:
 - Every pricing function gets tests (known textbook values, put-call parity, convergence checks).
 - Fix random seeds so every result is reproducible.
 - Save all experiment results to CSV, and generate plots from the CSVs with a script.
+- Do not add Co-Authored-By or Claude-Session lines to commit messages.
