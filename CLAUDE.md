@@ -8,9 +8,13 @@ Research question for the final write-up:
 ## About me (Yash)
 - IB DP2 student (Math AA HL, Physics HL, CS HL), aspiring quant developer. Comfortable with Python; **new to C++**.
 - I need to be able to explain every formula and line of code in an interview, so:
-  - Work one phase at a time. Don't jump ahead.
-  - Explain the maths intuitively first (what the formula means), then the code.
-  - Ask me a quick check question after each new concept.
+  - Work one phase at a time, one feature at a time. Don't jump ahead.
+  - Explain the maths intuitively first (what the formula *means* and why it has that shape), then the code.
+  - After writing each piece, say what it does and *why* it's built that way, in simple language.
+  - Point out the concepts I'm meeting for the first time (risk-neutral pricing, variance reduction, and in
+    Phase 5 the C++ ones: templates, references, RAII, etc.).
+  - Keep explanations brief (what it does + why). Don't stop to quiz me after each feature — I'll ask if I
+    want to be tested.
 
 ## Stack
 - Python first (NumPy, SciPy, matplotlib, pytest) for Phases 1–4.
