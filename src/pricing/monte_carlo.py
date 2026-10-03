@@ -56,7 +56,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm
 
-from .common import check_payoff_kind, payoff, validate_inputs
+from .common import check_payoff_kind, critical_value, payoff, validate_inputs
 
 __all__ = [
     "MonteCarloResult",
@@ -204,8 +204,7 @@ def monte_carlo_price(
     # measuring spread around was itself estimated from the same data.
     standard_error = float(discounted_payoffs.std(ddof=1) / math.sqrt(n_paths))
 
-    z = float(norm.ppf(0.5 + 0.5 * confidence))
-    half_width = z * standard_error
+    half_width = critical_value(confidence) * standard_error
 
     return MonteCarloResult(
         price=price,

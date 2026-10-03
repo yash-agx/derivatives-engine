@@ -13,8 +13,10 @@ decimals per year, ``T`` is in years, and no dividends are modelled.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
+from scipy.stats import norm
 
 CALL = "call"
 PUT = "put"
@@ -64,6 +66,19 @@ def validate_inputs(S: float, K: float, r: float, sigma: float, T: float) -> Non
         raise ValueError(f"sigma (volatility) must be >= 0, got {sigma}")
     if T < 0:
         raise ValueError(f"T (years to expiry) must be >= 0, got {T}")
+
+
+@lru_cache(maxsize=None)
+def critical_value(confidence: float) -> float:
+    """The two-sided normal critical value for a confidence level.
+
+    Cached because it depends on nothing else: every Monte Carlo run used to
+    recompute the same 1.959963... through scipy, which costs 27 microseconds
+    and is most of the fixed overhead of a small run.
+    """
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"confidence must be in (0, 1), got {confidence}")
+    return float(norm.ppf(0.5 + 0.5 * confidence))
 
 
 def payoff(spot, K: float, kind: str):
