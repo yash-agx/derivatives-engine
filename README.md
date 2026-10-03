@@ -12,14 +12,16 @@ performance work in Phase 5.
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Black-Scholes prices and the five Greeks | in progress |
+| 1 | Black-Scholes prices and the five Greeks | **done** |
 | 2 | Binomial tree (CRR), European and American; Monte Carlo under GBM | not started |
 | 3 | Monte Carlo convergence: error, standard error, runtime, the 1/√N law | not started |
 | 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | not started |
 | 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | not started |
 
-Phase 1 so far: `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
-types, validated against Hull's worked examples, put-call parity, and finite differences.
+Phase 1: `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option types,
+with 2,669 passing tests — Hull's worked examples, put-call parity, every Greek against a central
+finite difference, and the edge cases (expiry now, zero and extreme volatility, deep in and out of
+the money, invalid inputs).
 
 ## Layout
 
