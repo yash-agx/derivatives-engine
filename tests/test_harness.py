@@ -227,17 +227,44 @@ def test_predicted_paths_actually_deliver_the_target_accuracy():
     assert achieved.ci_width / 2 == pytest.approx(0.01, rel=0.05)
 
 
-def test_efficiency_is_roughly_constant_in_path_count():
-    """Variance times runtime characterises the *method*, not the budget.
+def test_variance_falls_exactly_like_one_over_paths():
+    """The 1/sqrt(N) law, stated as a variance: double the paths, halve it.
 
-    Doubling the paths halves the variance and doubles the runtime, so the
-    product stays put. That is what makes it the right yardstick for comparing
-    Phase 4's estimators against this one.
+    Measured ratios per doubling from N=50,000 to 800,000 are 2.06, 2.01, 1.90
+    and 2.03. This is the half of the efficiency story that behaves.
+    """
+    variances = [run_seed_study(plain_monte_carlo, ATM_CALL, n_paths=n,
+                                seeds=range(300)).spread ** 2
+                 for n in (50_000, 100_000)]
+    assert variances[0] / variances[1] == pytest.approx(2.0, rel=0.15)
+
+
+def test_efficiency_is_only_roughly_constant_because_runtime_is_superlinear():
+    """Variance times runtime is *not* flat in N here, and the reason is cache.
+
+    The theory says this product should be constant: variance falls like 1/N
+    and runtime rises like N. The variance half holds exactly. The runtime half
+    does not -- past about 100,000 paths the working arrays no longer fit in
+    cache, so per-path cost rises and the product climbs from 3.2e-6 at
+    N=100,000 to 7.7e-6 at N=400,000, flattening near 7.6e-6 by N=800,000.
+
+    So the test asserts the real behaviour (within a factor of three) rather
+    than the textbook claim. The practical rule it protects: compare estimators
+    at the same path count, never across path counts.
     """
     products = [run_seed_study(plain_monte_carlo, ATM_CALL, n_paths=n,
-                               seeds=range(40)).variance_times_runtime
-                for n in (100_000, 400_000)]
-    assert products[1] / products[0] == pytest.approx(1.0, abs=0.6)
+                               seeds=range(100)).variance_times_runtime
+                for n in (100_000, 800_000)]
+    ratio = products[1] / products[0]
+    assert 0.33 < ratio < 3.0
+
+
+def test_runtime_per_path_rises_with_path_count():
+    """The memory effect, measured directly rather than inferred."""
+    per_path = [run_seed_study(plain_monte_carlo, ATM_CALL, n_paths=n,
+                               seeds=range(50)).runtime_per_path
+                for n in (50_000, 800_000)]
+    assert per_path[1] > per_path[0]
 
 
 # ---------------------------------------------------------------------------
