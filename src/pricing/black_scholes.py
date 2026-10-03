@@ -67,12 +67,23 @@ import math
 
 from scipy.stats import norm
 
-from .common import CALL, KINDS, PUT, check_kind, validate_inputs
+from .common import (
+    CALL,
+    KINDS,
+    PAYOFF_KINDS,
+    PUT,
+    STRADDLE,
+    check_kind,
+    check_payoff_kind,
+    validate_inputs,
+)
 
 __all__ = [
     "CALL",
     "PUT",
+    "STRADDLE",
     "KINDS",
+    "PAYOFF_KINDS",
     "GREEK_NAMES",
     "d1_d2",
     "call_price",
@@ -153,14 +164,18 @@ def put_price(S: float, K: float, r: float, sigma: float, T: float) -> float:
 
 
 def price(S: float, K: float, r: float, sigma: float, T: float, kind: str) -> float:
-    """``call_price`` or ``put_price``, chosen by ``kind``.
+    """``call_price``, ``put_price``, or their sum for a straddle.
 
-    Convenience for loops and tests that run over both option types.
+    Convenience for loops and tests that run over several option types. A
+    straddle is a call and a put on the same strike, so by linearity its price
+    is just the two added together -- no new formula needed.
     """
-    check_kind(kind)
+    check_payoff_kind(kind)
     if kind == CALL:
         return call_price(S, K, r, sigma, T)
-    return put_price(S, K, r, sigma, T)
+    if kind == PUT:
+        return put_price(S, K, r, sigma, T)
+    return call_price(S, K, r, sigma, T) + put_price(S, K, r, sigma, T)
 
 
 # ---------------------------------------------------------------------------
