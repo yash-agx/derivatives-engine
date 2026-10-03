@@ -273,11 +273,132 @@ averaged, and the rare-event failure is a problem of where the paths go.
   them — see the deep-in-the-money control variate above.
 - Still only GBM with constant volatility and no dividends, and only European payoffs.
 
-### Phase 5 — Performance engineering
-- [ ] Re-implement the Monte Carlo core in C++
-- [ ] Benchmark: pure Python loop vs NumPy vectorised vs C++
-- [ ] Optional: multithreading in C++
-- [ ] Results tables and charts
+### Phase 5 — Performance engineering ✅
+- [x] Re-implement the Monte Carlo core in C++ — `cpp/mc_engine.cpp`, all four Phase 4 methods
+- [x] Benchmark: pure Python loop vs NumPy vectorised vs C++ — `results/perf_*.csv`
+- [x] Multithreading in C++, with reproducibility guaranteed
+- [x] Results tables and charts
+
+Build and run:
+```
+cmake -S cpp -B cpp/build -G "MinGW Makefiles"
+cmake --build cpp/build
+python analysis\run_phase5.py          # ~20 s
+python analysis\plot_phase5.py
+```
+2,950 tests pass, 35 of them exercising the C++ engine.
+
+#### How Python calls the C++ (and why this way)
+
+A **C-ABI DLL loaded with `ctypes`**, not a Python extension module. This machine has
+MSVC-built CPython and WinLibs g++; an extension module (pybind11, Cython, a raw
+`PyMODINIT_FUNC`) links against CPython's own runtime and object layout, so mixing a
+MinGW-built one with an MSVC CPython risks two different C runtimes allocating and freeing
+each other's memory. The C ABI is the one interface both compilers agree on exactly — it is how
+Windows itself is called. Nothing of CPython crosses the boundary, `ctypes` ships with Python,
+and the boundary only has to carry seven doubles in and two out. Measured call overhead is
+**~30 µs**, of which 27 µs was scipy recomputing the same normal critical value on every run
+until that was cached.
+
+The DLL links `-static`: without it, it imports `libwinpthread-1.dll` from the compiler's own
+bin directory and Python fails to load it with an error that names the DLL rather than the
+missing dependency.
+
+#### Threads: independent streams and reproducibility
+
+The generator is **counter-based**: the draws for path `i` are a pure function of
+`(seed, i)` via a SplitMix64 mix, with Box-Muller on top. Two consequences, both of which the
+tests check:
+
+- **Streams cannot overlap.** Each path index is handed out exactly once, so no two threads can
+  ever draw the same numbers. This is a structural guarantee, not a probabilistic one — unlike
+  splitting a sequential generator and hoping the substreams do not collide.
+- **The answer does not depend on the thread count.** Because the work is also divided into a
+  **fixed number of chunks regardless of thread count**, the floating-point additions happen in
+  the same order every time. Measured: 1, 2, 3, 4, 8 and 16 threads return a **bitwise identical**
+  price and standard error. Without the fixed chunking the result would wobble in the last bits
+  as threads changed — still correct, but not reproducible.
+
+#### Findings
+
+**Throughput, European call, fastest of interleaved repeats** (million paths/second):
+
+| N | python loop | numpy | c++ 1 thread | c++ 24 threads |
+|---|---|---|---|---|
+| 10^3 | 2.85 | 5.77 | **15.1** | 0.27 |
+| 10^4 | 3.07 | **60.1** | 36.9 | 3.73 |
+| 10^5 | 2.94 | **51.8** | 38.6 | 32.0 |
+| 10^6 | 2.92 | 43.4 | 38.7 | **185.7** |
+| 10^7 | — | 39.4 | 38.5 | **324.1** |
+
+**Where each speedup comes from:**
+
+- **Interpreter → NumPy: 15–20x.** The pure Python loop costs ~340 ns per path — roughly a
+  thousand cycles for about twenty floating-point operations. Almost all of it is interpreter
+  overhead: boxing floats, dispatching method calls, stepping bytecode. NumPy moves the loop
+  into compiled, SIMD code and the per-path cost drops to 16.6 ns.
+- **NumPy → single-threaded C++: nothing at all (0.98x at 10^7).** This was the surprise, and it
+  is the honest headline: NumPy's inner loops are *already* compiled and vectorised, so a scalar
+  C++ loop has nothing to win on arithmetic. It processes one double at a time where NumPy does
+  four or eight. What C++ wins back is memory and call overhead; the two roughly cancel.
+- **Memory: the Phase 3 U-shape is a NumPy property, not a hardware one.** NumPy's per-path cost
+  is U-shaped — 173 ns at 10^3 (call overhead), 16.6 ns at 10^4, rising to 25.4 ns at 10^7 as its
+  temporary arrays leave cache. The C++ core keeps **no arrays at all** (Welford accumulation,
+  O(1) memory), and its per-path cost is **flat at 25.9 ns from 10^4 to 10^7**. It still has the
+  left half of the curve (66 ns at 10^3) from fixed per-call cost. So the rising half of Phase 3's
+  U-shape was the array traffic, and streaming removes it.
+- **Threads: 7.3x, saturating at 8.** Speedup is 1.99x / 3.95x / 7.34x at 2 / 4 / 8 threads
+  (99.6% / 98.8% / 91.8% efficiency), then **flat**: 16 threads gives 7.27x and 24 gives 7.04x.
+  This CPU (i7-14650HX) has 8 performance cores plus 8 efficiency cores and 24 logical threads,
+  so the eight P-cores are what this floating-point-bound loop can use.
+- **Threads are a liability on small batches.** At N=10^3, 24 threads costs **3,726 ns per path**
+  against 66 ns single-threaded — creating and joining the threads takes ~3.7 ms, hundreds of
+  times the actual work. The crossover is around N=10^5.
+
+**Cost (variance × runtime, lower is better), at 10^7 paths:** numpy 5.50e-6, c++ 1 thread
+5.62e-6, c++ 24 threads **6.68e-7** — 8.2x cheaper per unit of accuracy than NumPy. Since the
+variance per path is identical across implementations, this is purely the speed showing up in
+the metric that Phases 3 and 4 used.
+
+**All four estimators, Python against C++, at 10^6 paths** (million paths/second):
+
+| method | python | c++ 1 thread | c++ 24 threads |
+|---|---|---|---|
+| plain | 30.4 | 21.0 (0.69x) | 113.4 (**3.73x**) |
+| antithetic | 37.1 | 36.1 (0.97x) | 155.7 (**4.19x**) |
+| control | 16.7 | 20.3 (**1.21x**) | 109.1 (**6.52x**) |
+| importance | 20.2 | 18.9 (0.94x) | 103.4 (**5.13x**) |
+
+The control variate is where single-threaded C++ actually wins, because the Python version makes
+several passes over several temporary arrays to get a covariance while the C++ accumulates it in
+one pass with no memory at all.
+
+**And they are still statistically correct.** The C++ estimators run through the Phase 3 harness
+unchanged: unbiased on 300 seeds, reported standard error matching the real spread, coverage in
+range, antithetic standard errors computed over pairs, and importance sampling restoring the
+Phase 4 coverage rescue (0.87 → 0.95 on the K=160 call). The control-variate call and put satisfy
+put-call parity exactly, as in Python.
+
+#### Limitations
+- **Scalar C++ against vectorised NumPy is not a like-for-like language comparison.** The C++
+  core does not use SIMD intrinsics; NumPy does. `-march=native` changed nothing measurable
+  (25.2 vs 26.2 ns/path) because the loop is dominated by `exp`/`log`/`cos`/`sin`, which do not
+  auto-vectorise with the accumulation dependency present. A hand-vectorised C++ core, or one
+  using a vector math library, would be the real comparison and was not written.
+- Box-Muller costs two transcendentals per pair of normals; NumPy's ziggurat is cheaper per
+  draw. Some of the single-threaded parity is C++ doing more work per normal, not the language.
+- The machine is noisy: median and fastest timings differed by up to 1.9x, and running all the
+  repeats of one implementation together (rather than interleaving) cost a spurious factor of
+  1.9 on a first pass. Headline numbers use the fastest repeat; medians and spreads are in the
+  CSVs. Nothing here is pinned and turbo is on.
+- Thread saturation at 8 is a property of this CPU's core layout, not a general result.
+- `n_chunks` is part of the reproducibility contract: changing it changes the summation order
+  (though not the answer beyond rounding). It defaults to 64.
+- SplitMix64 + Box-Muller is a sound counter-based generator, but it has not been run through a
+  statistical test battery here; the evidence for it is the harness's bias, standard-error and
+  coverage checks, which are sensitive but not a substitute for TestU01.
+- Only one option and one machine; no attempt at GPU, SIMD intrinsics, or a thread pool that
+  would amortise thread creation at small N.
 
 ### Write-up
 - [ ] Method, results, analysis, limitations (e.g. Black-Scholes assumptions: constant volatility, no dividends)

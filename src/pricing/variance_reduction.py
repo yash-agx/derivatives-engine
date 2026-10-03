@@ -69,7 +69,7 @@ import math
 import numpy as np
 from scipy.stats import norm
 
-from .common import check_payoff_kind, payoff, validate_inputs
+from .common import check_payoff_kind, critical_value, payoff, validate_inputs
 from .monte_carlo import MonteCarloResult
 
 __all__ = [
@@ -104,8 +104,7 @@ def _result(values, n_paths, seed, confidence, price=None) -> MonteCarloResult:
     count = len(values)
     estimate = float(np.mean(values)) if price is None else float(price)
     standard_error = float(np.std(values, ddof=1) / math.sqrt(count)) if count > 1 else 0.0
-    z = float(norm.ppf(0.5 + 0.5 * confidence))
-    half_width = z * standard_error
+    half_width = critical_value(confidence) * standard_error
     return MonteCarloResult(
         price=estimate,
         standard_error=standard_error,

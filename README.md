@@ -16,9 +16,10 @@ performance work in Phase 5.
 | 2 | Binomial tree (CRR), European and American; Monte Carlo under GBM | **done** |
 | 3 | Monte Carlo convergence: error, standard error, runtime, the 1/√N law | **done** |
 | 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | **done** |
-| 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | not started |
+| 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | **done** |
 
-2,913 tests pass across the models, the harness and the variance-reduced estimators.
+2,950 tests pass across the models, the harness, the variance-reduced estimators and the
+C++ engine.
 
 **Phase 1** — `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
 types: Hull's worked examples, put-call parity, every Greek against a central finite difference,
@@ -32,6 +33,9 @@ counts × 500 seeds.
 
 **Phase 4** — antithetic variates, a control variate, both combined, and importance sampling, all
 measured through the same harness at equal path counts.
+
+**Phase 5** — the four estimators rewritten in C++17 and called through a C ABI, so they run
+through that same harness: fast *and* demonstrably still correct.
 
 ## Phase 2 results
 
@@ -231,6 +235,63 @@ the drift by −d2 so the strike sits at the median, then reweights by the likel
 the only method that changes **where the paths go**, which is what a rare-event failure is about.
 
 
+## Phase 5 results
+
+```
+cmake -S cpp -B cpp/build -G "MinGW Makefiles"
+cmake --build cpp/build
+python analysis/run_phase5.py && python analysis/plot_phase5.py
+```
+
+### Four implementations of the same estimator
+
+![Throughput](results/perf_throughput.png)
+
+Throughput in million paths per second, fastest of interleaved repeats:
+
+| N | python loop | numpy | c++ 1 thread | c++ 24 threads |
+|---|---|---|---|---|
+| 10^3 | 2.85 | 5.77 | **15.1** | 0.27 |
+| 10^5 | 2.94 | **51.8** | 38.6 | 32.0 |
+| 10^7 | — | 39.4 | 38.5 | **324.1** |
+
+**Single-threaded C++ does not beat NumPy** — 38.5 against 39.4 M paths/s at 10^7. That is the
+honest result and it is worth stating plainly: NumPy's inner loops are already compiled and
+SIMD-vectorised, so a scalar C++ loop has nothing to win on arithmetic. The interpreter is what
+was slow (340 ns per path, ~1000 cycles for ~20 flops), and NumPy had already fixed that.
+
+### Where the speedups actually come from
+
+![Per-path cost](results/perf_per_path.png)
+
+Phase 3 found the per-path cost U-shaped and blamed cache pressure. Phase 5 can test that: the
+C++ core keeps **no arrays** (Welford accumulation, O(1) memory), and its per-path cost is **flat
+at 25.9 ns from 10^4 to 10^7** where NumPy climbs from 16.6 to 25.4 ns. So the rising half of the
+U-shape was array traffic, and streaming removes it. The left half — fixed per-call cost — is
+still there in both.
+
+### Threads
+
+![Thread scaling](results/perf_threads.png)
+
+1.99x / 3.95x / 7.34x at 2 / 4 / 8 threads, then flat (7.27x at 16, 7.04x at 24): this CPU has 8
+performance cores and the loop is floating-point bound. At N=10^3, 24 threads costs **3,726 ns
+per path** against 66 ns on one — thread creation is ~3.7 ms, hundreds of times the work.
+
+**Every thread count returns a bitwise identical price.** The draws are a pure function of
+`(seed, path index)`, so streams cannot overlap by construction; and the work is split into a
+*fixed number of chunks whatever the thread count*, so the floating-point additions happen in the
+same order every time.
+
+### Still correct, not just fast
+
+The C++ estimators go through the Phase 3 harness unchanged — unbiased over 300 seeds, reported
+standard error matching the real spread, coverage in range, antithetic standard errors computed
+over pairs, and importance sampling reproducing the Phase 4 rescue (0.87 → 0.95 coverage on the
+K=160 call). Cost (variance × runtime) at 10^7 paths: **6.68e-7 against NumPy's 5.50e-6**, 8.2x
+cheaper per unit of accuracy.
+
+
 ## Layout
 
 ```
@@ -239,11 +300,13 @@ src/pricing/black_scholes.py       closed-form prices and Greeks
 src/pricing/binomial.py            Cox-Ross-Rubinstein tree, European and American
 src/pricing/monte_carlo.py         GBM simulation with standard error and confidence interval
 src/pricing/variance_reduction.py  antithetic, control variate, both, importance sampling
+src/pricing/cpp_backend.py         loads the C++ engine through a C ABI with ctypes
+cpp/mc_engine.cpp                  the four estimators in C++17, counter-based RNG, threaded
 src/experiments/harness.py         measures any estimator: bias, RMSE, coverage, runtime, cost
 tests/                             pytest suite (textbook values, parity, finite differences,
                                    edge cases, CI coverage, calibrated fake estimators)
-analysis/run_phase{2,3,4}.py       run the experiments, write results/*.csv
-analysis/plot_phase{2,3,4}.py      read the CSVs, print the tables, write results/*.png
+analysis/run_phase{2,3,4,5}.py     run the experiments, write results/*.csv
+analysis/plot_phase{2,3,4,5}.py    read the CSVs, print the tables, write results/*.png
 results/                           experiment CSVs and charts (committed, so the write-up can cite them)
 requirements.txt                   numpy, scipy, matplotlib, pytest
 pytest.ini                         puts src/ on the import path
