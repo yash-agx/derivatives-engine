@@ -173,6 +173,33 @@ def print_straddle(rows: list) -> None:
     print("\n(a factor below 1.00 means the method increased the variance)")
 
 
+def print_combination(rows: list) -> None:
+    print("\n\nHOW ANTITHETIC AND CONTROL VARIATES COMBINE")
+    print("Writing Y for a path's discounted payoff and X for its discounted terminal")
+    print("stock price (the control), the three factors are:")
+    print("    antithetic = 1 / (1 + rho_A)          rho_A  = Corr(Y(Z), Y(-Z))")
+    print("    control    = 1 / (1 - rho_XY^2)       rho_XY = Corr(Y, X)")
+    print("    both       = 1 / [(1 + rho_A)(1 - rho_AB^2)]")
+    print("with rho_AB the correlation of the PAIR AVERAGES of Y and X. So 'both' is")
+    print("the antithetic factor times a control factor recomputed on pairs -- not the")
+    print("product of the two separate factors. The ratio is (1-rho_XY^2)/(1-rho_AB^2).\n")
+    print(f"{'option':>18} {'rho_A':>8} {'rho_XY':>8} {'rho_AB':>8} "
+          f"{'anti':>9} {'control':>11} {'both':>13} {'product':>14} {'both/prod':>10}")
+    for row in rows:
+        if math.isnan(num(row["rho_antithetic"])):
+            continue
+        print(f"{row['option']:>18} {num(row['rho_antithetic']):>+8.3f} "
+              f"{num(row['rho_payoff_control']):>+8.3f} "
+              f"{num(row['rho_pair_payoff_control']):>+8.3f} "
+              f"{num(row['antithetic_factor']):>8.1f}x {num(row['control_factor']):>10.1f}x "
+              f"{num(row['both_factor']):>12.1f}x {num(row['product_of_factors']):>13.1f}x "
+              f"{num(row['both_over_product']):>9.2f}x")
+    print("\nThe combination beats the product when pairing makes the control work")
+    print("better (rho_AB > rho_XY), and loses to it when the payoff was already")
+    print("nearly an exact linear function of the control, because then pairing")
+    print("throws away the very component the control was exploiting.")
+
+
 def print_bias(rows: list) -> None:
     print("\n\nCONTROL-VARIATE BIAS FROM REUSING THE PATHS")
     print("Estimating c on the same paths it is applied to makes it depend on the")
@@ -381,6 +408,52 @@ def plot_coverage_rescue(rows: list) -> None:
     print(f"  wrote {(RESULTS / 'vr_coverage_rescue.png').relative_to(ROOT)}")
 
 
+def plot_combination(rows: list) -> None:
+    usable = [r for r in rows if not math.isnan(num(r["rho_antithetic"]))]
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.5, 5.0))
+    fig.subplots_adjust(top=0.80, bottom=0.13, left=0.08, right=0.98, wspace=0.26)
+    titles(fig, "Antithetic and control variates do not simply multiply",
+           "The combined factor is 1/[(1+rhoA)(1-rhoAB^2)] -- the antithetic factor "
+           "times a control factor recomputed on pair averages.")
+
+    # Left: pairing usually lifts the control's correlation, which is the whole
+    # reason the combination usually beats the product.
+    left.plot([0, 1], [0, 1], color=INK_SECONDARY, linewidth=1.3, linestyle="--",
+              zorder=1, label="no change from pairing")
+    left.plot([abs(num(r["rho_payoff_control"])) for r in usable],
+              [abs(num(r["rho_pair_payoff_control"])) for r in usable],
+              "o", color=ORANGE, linestyle="none", **MARK)
+    left.set_xlim(0.3, 1.01)
+    left.set_ylim(0.75, 1.005)
+    left.set_xlabel("|correlation| of payoff with control, per path")
+    left.set_ylabel("the same, on pair averages")
+    left.set_title("Pairing usually improves the control", fontsize=10, color=INK,
+                   loc="left")
+    left.legend(loc="lower right", labelcolor=INK_SECONDARY, fontsize=9)
+
+    # Right: and where it does not, the combination underperforms the product.
+    right.axhline(1.0, color=INK_SECONDARY, linewidth=1.3, zorder=3)
+    for row in usable:
+        ratio = num(row["both_over_product"])
+        colour = AQUA if ratio >= 1 else ORANGE
+        right.plot(abs(num(row["rho_payoff_control"])), ratio, "o", color=colour,
+                   linestyle="none", **MARK)
+    right.set_yscale("log")
+    right.set_xlabel("|correlation| of payoff with control, per path")
+    right.set_ylabel("combined factor / product of factors")
+    right.set_title("Above 1: better than the product. Below: worse.", fontsize=10,
+                    color=INK, loc="left")
+    right.text(0.985, 0.06,
+               "when the payoff is already almost\nan exact linear function of the\n"
+               "control, pairing throws away what\nthe control was exploiting",
+               transform=right.transAxes, color=INK_SECONDARY, fontsize=8.5,
+               ha="right", va="bottom", linespacing=1.5)
+
+    fig.savefig(RESULTS / "vr_combination.png", dpi=160)
+    plt.close(fig)
+    print(f"  wrote {(RESULTS / 'vr_combination.png').relative_to(ROOT)}")
+
+
 def plot_control_bias(rows: list) -> None:
     by_pilot = defaultdict(list)
     for row in rows:
@@ -429,15 +502,18 @@ def main() -> None:
     straddle = read_csv("vr_straddle.csv")
     bias = read_csv("vr_control_bias.csv")
     rescue = read_csv("vr_coverage_rescue.csv")
+    combination = read_csv("vr_combination.csv")
 
     print_comparison(comparison)
     print_cost(comparison)
+    print_combination(combination)
     print_straddle(straddle)
     print_bias(bias)
     print_rescue(rescue)
 
     print("\n\nCHARTS")
     plot_variance_reduction(comparison)
+    plot_combination(combination)
     plot_straddle(straddle)
     plot_coverage_rescue(rescue)
     plot_control_bias(bias)

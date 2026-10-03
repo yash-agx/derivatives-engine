@@ -164,9 +164,27 @@ Variance reduction at 100,000 paths, equal path budget (above 1 is an improvemen
 | deep ITM 1y | 9.3x | 111x | **521x** | 0.0x |
 | K=160 6m | 0.9x | 1.0x | 0.9x | **1,745x** |
 
-Combining antithetic and control multiplies rather than adds — they remove different things.
 Antithetic is also slightly *faster* than plain (it needs half as many random numbers), so cost
 and variance rank together almost everywhere.
+
+### Combining them is neither additive nor multiplicative
+
+![How the methods combine](results/vr_combination.png)
+
+With `Y` the discounted payoff of a path and `X` its discounted terminal stock price:
+
+| method | factor |
+|---|---|
+| antithetic | `1 / (1 + ρ_A)`, &nbsp; `ρ_A = Corr(Y(Z), Y(−Z))` |
+| control | `1 / (1 − ρ_XY²)`, &nbsp; `ρ_XY = Corr(Y, X)` |
+| both | `1 / [(1 + ρ_A)(1 − ρ_AB²)]`, &nbsp; `ρ_AB = Corr(pair mean of Y, pair mean of X)` |
+
+The combined factor is the antithetic factor times a control factor **recomputed on pair
+averages** — so it beats the naive product by `(1 − ρ_XY²)/(1 − ρ_AB²)`, which can be either side
+of 1. Pairing removes the odd part of payoff *and* control, and what remains usually correlates
+more tightly (ATM 1y: ρ_XY 0.924 → ρ_AB 0.964, giving **2.08× the product**). But when the payoff
+is already nearly an exact linear function of the control, pairing discards exactly what the
+control was exploiting (deep ITM 1y: ρ_XY 0.995 → ρ_AB 0.990, **0.46× the product**).
 
 Every method's error bar stayed honest. The antithetic standard error gets the most scrutiny
 because it is the easy one to get wrong: computed over **pairs** it matches the true standard
