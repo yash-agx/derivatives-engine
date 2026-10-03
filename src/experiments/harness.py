@@ -204,14 +204,30 @@ class SeedStudy:
         return float(sum(self.runtimes))
 
     @property
+    def runtime_per_path(self) -> float:
+        """Seconds per path. Not constant -- see ``variance_times_runtime``."""
+        return self.median_runtime / self.n_paths
+
+    @property
     def variance_times_runtime(self) -> float:
         """Efficiency: estimator variance times the time one run costs.
 
-        Lower is better. The useful property is that it is roughly *constant in
-        N* for a given method -- doubling the paths halves the variance and
-        doubles the time -- so it characterises the method rather than the
-        budget, which is exactly what is needed to compare Phase 4's estimators
-        against this one.
+        Lower is better. In theory this is *constant in N* -- doubling the
+        paths halves the variance and doubles the time -- which would make it a
+        property of the method rather than of the budget, and so the right
+        yardstick for comparing Phase 4's estimators against this one.
+
+        Measured here, only half of that holds. The variance does fall exactly
+        like 1/N (2.06x, 2.01x, 1.90x, 2.03x per doubling from N=50,000 to
+        800,000). The runtime does not rise like N: 1.95x, 3.23x, 2.81x, 2.01x
+        per doubling over the same range, because somewhere past 100,000 paths
+        the arrays stop fitting in cache and each path starts costing more. So
+        the product climbs from 3.2e-6 at N=100,000 to 7.7e-6 at N=400,000
+        before flattening off around 7.6e-6.
+
+        The practical consequence, and it matters for Phase 4: compare
+        estimators **at the same path count**. Comparing across path counts
+        measures the memory system as much as the method.
         """
         spread = self.spread
         return float(spread * spread * self.median_runtime)
@@ -253,6 +269,7 @@ class SeedStudy:
             "coverage": f"{self.coverage:.4f}",
             "payoff_std": f"{self.payoff_std:.8f}",
             "median_runtime_s": f"{self.median_runtime:.8f}",
+            "runtime_per_path_ns": f"{self.runtime_per_path * 1e9:.4f}",
             "total_runtime_s": f"{self.total_runtime:.4f}",
             "variance_times_runtime": f"{self.variance_times_runtime:.6e}",
             "paths_for_1_cent": f"{self.paths_for_target(0.01):.0f}",
