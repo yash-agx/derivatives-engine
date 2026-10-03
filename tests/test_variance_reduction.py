@@ -292,6 +292,62 @@ def test_control_variate_barely_helps_far_out_of_the_money():
     assert variance_ratio(CONTROL, BROKEN) < 1.5
 
 
+DEEP_ITM = Option("deep ITM 1m", S=130.0, K=100.0, r=0.05, sigma=0.20,
+                  T=1.0 / 12.0, kind="call")
+
+
+def test_control_variate_breaks_its_own_error_bar_deep_in_the_money():
+    """Variance reduction can *manufacture* the Phase 3 rare-event failure.
+
+    Deep in the money a call is almost surely exercised, so its discounted
+    payoff is almost surely exactly ``exp(-rT)*S_T - K*exp(-rT)`` -- an exact
+    affine function of the control. The optimal coefficient is then 1, the
+    residual is a constant, and the variance collapses by a factor of 14
+    million.
+
+    But the option is not *exactly* the forward: it is the forward minus a put
+    worth 2.6e-6, and that put only shows up on paths finishing below the
+    strike, which happen with probability 2.2e-6. At 100,000 paths, 83% of runs
+    contain no such path at all. Those runs report a standard error of
+    essentially zero around a price that is wrong by the put value, so the
+    interval is a point that misses. Measured coverage: 0.158, and exactly the
+    same 83% of runs report se < 1e-12.
+
+    The method removed all the variance it could see and left behind a pure
+    rare-event problem -- the same pathology Phase 3 documented, created here
+    by the variance reduction itself.
+    """
+    runs = [control_variate_monte_carlo(*DEEP_ITM.args, DEEP_ITM.kind,
+                                        n_paths=100_000, seed=seed)
+            for seed in range(200)]
+    truth = DEEP_ITM.black_scholes()
+
+    near_zero_error_bars = sum(r.standard_error < 1e-12 for r in runs) / len(runs)
+    coverage = sum(r.contains(truth) for r in runs) / len(runs)
+    assert near_zero_error_bars > 0.7       # most runs claim perfect precision
+    assert coverage < 0.4                   # and most of those are wrong
+
+    # Plain Monte Carlo, with far more variance, keeps an honest interval.
+    plain_coverage = sum(
+        plain_monte_carlo(DEEP_ITM, 100_000, seed).contains(truth)
+        for seed in range(200)
+    ) / 200
+    assert plain_coverage > 0.90
+
+
+def test_importance_sampling_fails_badly_deep_in_the_money():
+    """Shifting towards a strike the spot has already passed is actively harmful.
+
+    The shift is negative here (the strike sits below the median terminal
+    price), so paths are pushed away from where the payoff actually is and the
+    likelihood-ratio weights blow up. Measured: variance about 1,750x *worse*
+    than plain, and coverage 0.296.
+    """
+    assert importance_sampling_shift(*DEEP_ITM.args) < 0
+    assert variance_ratio(IMPORTANCE, DEEP_ITM, n_paths=20_000,
+                          seeds=range(150)) < 0.1
+
+
 # ---------------------------------------------------------------------------
 # 5. The key experiment: does anything fix the Phase 3 coverage failure?
 # ---------------------------------------------------------------------------

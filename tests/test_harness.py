@@ -259,12 +259,29 @@ def test_efficiency_is_only_roughly_constant_because_runtime_is_superlinear():
     assert 0.33 < ratio < 3.0
 
 
-def test_runtime_per_path_rises_with_path_count():
-    """The memory effect, measured directly rather than inferred."""
-    per_path = [run_seed_study(plain_monte_carlo, ATM_CALL, n_paths=n,
-                               seeds=range(50)).runtime_per_path
-                for n in (50_000, 800_000)]
-    assert per_path[1] > per_path[0]
+def test_per_path_cost_is_u_shaped_in_the_batch_size():
+    """Neither a tiny batch nor a huge one is the cheapest way to buy paths.
+
+    Measured (three repeats agreeing to a few tenths of a nanosecond)::
+
+        N        1e3    1e4    5e4    1e5    4e5    8e5    1e6
+        ns/path  73.5   17.3   15.9   17.2   22.3   22.5   22.7
+
+    Small batches pay a fixed per-call overhead spread over very few paths;
+    large ones stop fitting in cache. The assertions below are the two robust
+    halves of that shape -- a busy machine can only make a run *slower*, so
+    neither can be flipped by load. (The exact nanosecond figures move a lot
+    between sessions; only the shape is stable.)
+    """
+    per_path = {
+        n: run_seed_study(plain_monte_carlo, ATM_CALL, n_paths=n,
+                          seeds=range(60)).runtime_per_path
+        for n in (1_000, 100_000, 1_000_000)
+    }
+    # A tiny batch is dominated by per-call overhead: several times the cost.
+    assert per_path[1_000] > 2.0 * per_path[100_000]
+    # And a huge batch has stopped buying any economy of scale.
+    assert per_path[1_000_000] > 0.9 * per_path[100_000]
 
 
 # ---------------------------------------------------------------------------
