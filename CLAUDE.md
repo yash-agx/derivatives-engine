@@ -35,10 +35,30 @@ Research question for the final write-up:
 - `tests/test_edge_cases.py` — T = 0 and sigma = 0, one-second and 100-year expiries, vol from
   1e-8 to 10, moneyness from 1e-6 to 1e6, and invalid inputs
 
-### Phase 2 — Numerical pricing
-- [ ] Binomial tree (Cox-Ross-Rubinstein), European and American options
-- [ ] Show binomial price converging to Black-Scholes as steps increase (plot)
-- [ ] Monte Carlo pricing using geometric Brownian motion
+### Phase 2 — Numerical pricing ✅
+- [x] Binomial tree (Cox-Ross-Rubinstein), European and American options — `src/pricing/binomial.py`
+- [x] Show binomial price converging to Black-Scholes as steps increase (plot) —
+      `results/binomial_convergence.png`, `results/binomial_oscillation.png`
+- [x] Monte Carlo pricing using geometric Brownian motion — `src/pricing/monte_carlo.py`
+      (exact terminal-price draw, with standard error and 95% confidence interval)
+
+2,825 tests pass (117 for the tree, 39 for the simulation). Experiments: `python analysis/run_phase2.py` (~25 s, writes `results/*.csv`),
+then `python analysis/plot_phase2.py` (tables and `results/*.png`).
+
+Key numbers to carry into Phase 3:
+- CRR error is O(1/N): at the money `error × N` is constant to 1% (1.995 → 2.000 from N=50 to
+  3200), and the measured log-log slope is −1.00.
+- Odd/even oscillation: at the money, even N undershoots Black-Scholes and odd N overshoots,
+  every time. Averaging an N/N+1 pair leaves 7.1% of the better single error — a free accuracy
+  gain worth remembering.
+- Away from the money the sign flips in slow groups instead of alternating, because the strike
+  drifts between lattice nodes as N changes.
+- American call premium is exactly 0 everywhere (no dividends). American put premium is 9.41 at
+  S=60 (K=100, r=10%) and exactly 0 at every spot when r=0 — the premium is interest on the
+  strike, not optionality.
+- Monte Carlo 95% CI coverage is 94.4–96.0% for a normal option, but only 75.2% at N=5,000 for a
+  deep out-of-the-money call (rare payoffs, CLT not yet valid), recovering to 93.2% at N=100,000.
+  A reported standard error is only as good as the normal approximation behind it.
 
 ### Phase 3 — Monte Carlo investigation
 - [ ] Run 1,000 → 10,000 → 100,000 → 1,000,000 simulations
