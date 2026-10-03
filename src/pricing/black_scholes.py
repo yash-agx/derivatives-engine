@@ -90,6 +90,11 @@ def _validate(S: float, K: float, r: float, sigma: float, T: float) -> None:
     ``S`` and ``K`` must be strictly positive because the formulas take
     ``ln(S/K)``.
     """
+    # Finiteness first: NaN fails every comparison below, so checking it here
+    # is what makes the error message say what is actually wrong.
+    for name, value in (("S", S), ("K", K), ("r", r), ("sigma", sigma), ("T", T)):
+        if math.isnan(value) or math.isinf(value):
+            raise ValueError(f"{name} must be a finite number, got {value}")
     if not S > 0:
         raise ValueError(f"S (spot) must be > 0, got {S}")
     if not K > 0:
@@ -98,9 +103,6 @@ def _validate(S: float, K: float, r: float, sigma: float, T: float) -> None:
         raise ValueError(f"sigma (volatility) must be >= 0, got {sigma}")
     if T < 0:
         raise ValueError(f"T (years to expiry) must be >= 0, got {T}")
-    for name, value in (("S", S), ("K", K), ("r", r), ("sigma", sigma), ("T", T)):
-        if math.isnan(value) or math.isinf(value):
-            raise ValueError(f"{name} must be a finite number, got {value}")
 
 
 def d1_d2(S: float, K: float, r: float, sigma: float, T: float) -> tuple[float, float]:
