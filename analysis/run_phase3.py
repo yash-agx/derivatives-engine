@@ -17,7 +17,8 @@ Writes:
 
 * ``mc_convergence.csv``  -- one row per (option, path count): bias, RMSE, the
   real spread across seeds, the mean reported standard error and their ratio,
-  coverage, runtime, efficiency and the paths needed for a target error.
+  coverage, runtime, cost (variance x runtime, lower is better) and the paths
+  needed for a target error.
 * ``mc_payoff_shape.csv`` -- one row per option: the skewness, excess kurtosis
   and zero fraction of its payoff distribution, which is what explains the
   coverage results.
