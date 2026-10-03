@@ -157,5 +157,6 @@ def test_price_dispatcher_matches_named_functions():
 
 
 def test_bad_kind_raises():
+    """'straddle' is a valid kind from Phase 4 on, so this uses a real non-kind."""
     with pytest.raises(ValueError, match="call.*put"):
-        price(100.0, 100.0, 0.05, 0.2, 1.0, "straddle")
+        price(100.0, 100.0, 0.05, 0.2, 1.0, "butterfly")
