@@ -58,7 +58,13 @@ from scipy.stats import norm
 
 from .common import check_kind, payoff, validate_inputs
 
-__all__ = ["MonteCarloResult", "monte_carlo_price", "Z_95"]
+__all__ = [
+    "MonteCarloResult",
+    "monte_carlo_price",
+    "simulate_terminal_spots",
+    "simulate_discounted_payoffs",
+    "Z_95",
+]
 
 # Two-sided 95% normal critical value: 1.959963... , not the rounded 1.96.
 # P(-Z_95 < Z < Z_95) = 0.95 for a standard normal Z.
@@ -103,6 +109,59 @@ class MonteCarloResult:
         )
 
 
+def simulate_terminal_spots(
+    S: float,
+    r: float,
+    sigma: float,
+    T: float,
+    n_paths: int,
+    seed: int,
+) -> np.ndarray:
+    """Draw ``n_paths`` possible stock prices at expiry, in one step.
+
+    The exact GBM solution::
+
+        S_T = S * exp( (r - sigma**2 / 2) * T  +  sigma * sqrt(T) * Z )
+
+    Exposed separately because the terminal price is useful on its own: its
+    mean is known exactly to be the forward ``S*exp(r*T)``, which is what
+    makes the stock itself usable as a control variate in Phase 4.
+    """
+    validate_inputs(S, S, r, sigma, T)      # strike is irrelevant here; reuse the checks
+    if int(n_paths) != n_paths or n_paths < 1:
+        raise ValueError(f"n_paths must be a whole number >= 1, got {n_paths!r}")
+
+    rng = np.random.default_rng(seed)
+    normals = rng.standard_normal(int(n_paths))
+    drift = (r - 0.5 * sigma * sigma) * T
+    diffusion = sigma * math.sqrt(T) * normals
+    return S * np.exp(drift + diffusion)
+
+
+def simulate_discounted_payoffs(
+    S: float,
+    K: float,
+    r: float,
+    sigma: float,
+    T: float,
+    kind: str,
+    n_paths: int,
+    seed: int,
+) -> np.ndarray:
+    """One discounted payoff per simulated path.
+
+    This is the sample the price is the mean of, and the sample whose spread
+    the standard error measures. Phase 3 needs it raw, to ask how skewed it is
+    -- because the confidence interval assumes the *mean* of these numbers is
+    normally distributed, and how quickly that becomes true depends on how
+    lopsided this distribution is.
+    """
+    validate_inputs(S, K, r, sigma, T)
+    check_kind(kind)
+    terminal_spots = simulate_terminal_spots(S, r, sigma, T, n_paths=n_paths, seed=seed)
+    return math.exp(-r * T) * payoff(terminal_spots, K, kind)
+
+
 def monte_carlo_price(
     S: float,
     K: float,
@@ -136,15 +195,9 @@ def monte_carlo_price(
     if not 0.0 < confidence < 1.0:
         raise ValueError(f"confidence must be in (0, 1), got {confidence}")
 
-    rng = np.random.default_rng(seed)
-    normals = rng.standard_normal(n_paths)
-
-    # The exact GBM solution: one draw per path, no time-stepping.
-    drift = (r - 0.5 * sigma * sigma) * T
-    diffusion = sigma * math.sqrt(T) * normals
-    terminal_spots = S * np.exp(drift + diffusion)
-
-    discounted_payoffs = math.exp(-r * T) * payoff(terminal_spots, K, kind)
+    discounted_payoffs = simulate_discounted_payoffs(
+        S, K, r, sigma, T, kind, n_paths=n_paths, seed=seed
+    )
 
     price = float(discounted_payoffs.mean())
     # ddof=1: the unbiased sample standard deviation, because the mean we are
