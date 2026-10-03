@@ -213,6 +213,84 @@ def test_both_together_help_most():
     assert variance_ratio(BOTH, ATM_CALL) > 15.0
 
 
+def test_combining_is_neither_additive_nor_multiplicative():
+    """The combined factor is not the product of the two separate factors.
+
+    With Y the discounted payoff of a path and X its discounted terminal stock
+    price (the control)::
+
+        antithetic = 1 / (1 + rho_A)        rho_A  = Corr(Y(Z), Y(-Z))
+        control    = 1 / (1 - rho_XY^2)     rho_XY = Corr(Y, X)
+        both       = 1 / [(1 + rho_A)(1 - rho_AB^2)]
+
+    where rho_AB is the correlation of the *pair averages*. So "both" is the
+    antithetic factor times a control factor recomputed on pairs, and the ratio
+    to the naive product is (1 - rho_XY^2) / (1 - rho_AB^2) -- which lands on
+    either side of 1 depending on whether pairing helps the control.
+
+    Checked here against measured variances rather than against the formula
+    alone, so it is the estimators that are being tested, not the algebra.
+    """
+    S, K, r, sigma, T = ATM
+    n_pairs = 2_000_000
+    normals = np.random.default_rng(4242).standard_normal(n_pairs)
+    drift = (r - 0.5 * sigma ** 2) * T
+    vol = sigma * math.sqrt(T)
+    discount = math.exp(-r * T)
+
+    up, down = S * np.exp(drift + vol * normals), S * np.exp(drift - vol * normals)
+    y_up, y_down = discount * np.maximum(up - K, 0.0), discount * np.maximum(down - K, 0.0)
+    x_up, x_down = discount * up, discount * down
+
+    rho_a = float(np.corrcoef(y_up, y_down)[0, 1])
+    rho_xy = float(np.corrcoef(np.concatenate([y_up, y_down]),
+                               np.concatenate([x_up, x_down]))[0, 1])
+    rho_ab = float(np.corrcoef(0.5 * (y_up + y_down), 0.5 * (x_up + x_down))[0, 1])
+
+    antithetic_factor = 1.0 / (1.0 + rho_a)
+    control_factor = 1.0 / (1.0 - rho_xy ** 2)
+    both_factor = antithetic_factor / (1.0 - rho_ab ** 2)
+
+    # The identity: the ratio to the product is governed by the two control
+    # correlations alone.
+    assert both_factor / (antithetic_factor * control_factor) == pytest.approx(
+        (1 - rho_xy ** 2) / (1 - rho_ab ** 2), rel=1e-9
+    )
+    # And for this option the combination beats the product, because pairing
+    # lifts the control's correlation (0.924 -> 0.964).
+    assert rho_ab > rho_xy
+    assert both_factor > 1.5 * antithetic_factor * control_factor
+
+    # The formulas describe the actual estimators, not just themselves.
+    assert variance_ratio(ANTITHETIC, ATM_CALL) == pytest.approx(
+        antithetic_factor, rel=0.25)
+    assert variance_ratio(BOTH, ATM_CALL) == pytest.approx(both_factor, rel=0.25)
+
+
+def test_deep_in_the_money_combination_loses_to_the_product():
+    """The other side of the same identity.
+
+    Deep in the money the payoff is already nearly an exact linear function of
+    the control, so pairing discards the very component the control was
+    exploiting and the combination comes in *below* the product.
+    """
+    S, K, r, sigma, T = 130.0, 100.0, 0.05, 0.20, 1.0
+    normals = np.random.default_rng(99).standard_normal(2_000_000)
+    drift = (r - 0.5 * sigma ** 2) * T
+    vol = sigma * math.sqrt(T)
+    discount = math.exp(-r * T)
+    up, down = S * np.exp(drift + vol * normals), S * np.exp(drift - vol * normals)
+    y_up, y_down = discount * np.maximum(up - K, 0.0), discount * np.maximum(down - K, 0.0)
+    x_up, x_down = discount * up, discount * down
+
+    rho_xy = float(np.corrcoef(np.concatenate([y_up, y_down]),
+                               np.concatenate([x_up, x_down]))[0, 1])
+    rho_ab = float(np.corrcoef(0.5 * (y_up + y_down), 0.5 * (x_up + x_down))[0, 1])
+    assert rho_xy > 0.99          # already almost perfect per path
+    assert rho_ab < rho_xy        # and pairing makes it worse, not better
+    assert (1 - rho_xy ** 2) / (1 - rho_ab ** 2) < 1.0
+
+
 def test_control_variate_estimates_satisfy_put_call_parity_exactly():
     """A free consequence worth knowing, and a strong correctness check.
 

@@ -23,12 +23,18 @@ Four experiments:
 4. ``vr_coverage_rescue.csv`` -- the key experiment. Phase 3 found that a deep
    out-of-the-money option breaks the confidence interval because almost no
    path pays. Do any of these methods fix it?
+5. ``vr_combination.csv`` -- why combining antithetic and control variates is
+   neither the sum nor the product of the two factors, measured through the
+   three correlations that actually determine it.
 """
 
 import csv
+import math
 import sys
 import time
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))      # the package is not installed; see pytest.ini
@@ -40,6 +46,7 @@ from experiments.harness import (                                    # noqa: E40
     plain_monte_carlo,
     run_seed_study,
 )
+from pricing.common import payoff                                    # noqa: E402
 from pricing.variance_reduction import (                             # noqa: E402
     control_variate_monte_carlo,
     importance_sampling_shift,
@@ -220,6 +227,72 @@ def run_coverage_rescue() -> None:
     write_csv("vr_coverage_rescue.csv", list(rows[0]), rows)
 
 
+def run_combination_decomposition() -> None:
+    """Measure the three correlations that govern how the methods combine.
+
+    Writing Y for one path's discounted payoff and X for its discounted
+    terminal stock price (the control, mean exactly S)::
+
+        antithetic  factor = 1 / (1 + rho_A)        rho_A  = Corr(Y(Z), Y(-Z))
+        control     factor = 1 / (1 - rho_XY^2)     rho_XY = Corr(Y, X)
+        both        factor = 1 / [(1 + rho_A)(1 - rho_AB^2)]
+
+    where rho_AB is the correlation of the *pair averages* of Y and X. The
+    combined factor is therefore the antithetic factor times a control factor
+    recomputed on pairs -- not the product of the two separate factors. The
+    ratio between them is (1 - rho_XY^2) / (1 - rho_AB^2).
+    """
+    print("\n5/5 how the two methods combine: correlation decomposition")
+    sample = 4_000_000
+    rng = np.random.default_rng(20260101)
+    normals = rng.standard_normal(sample)
+    rows = []
+    for option in GRID + STRADDLES:
+        S, K, r, sigma, T = option.args
+        drift = (r - 0.5 * sigma * sigma) * T
+        vol = sigma * math.sqrt(T)
+        discount = math.exp(-r * T)
+
+        up_spot = S * np.exp(drift + vol * normals)
+        down_spot = S * np.exp(drift - vol * normals)
+        y_up = discount * payoff(up_spot, K, option.kind)
+        y_down = discount * payoff(down_spot, K, option.kind)
+        x_up, x_down = discount * up_spot, discount * down_spot
+
+        rho_a = float(np.corrcoef(y_up, y_down)[0, 1])
+        rho_xy = float(np.corrcoef(np.concatenate([y_up, y_down]),
+                                   np.concatenate([x_up, x_down]))[0, 1])
+        rho_ab = float(np.corrcoef(0.5 * (y_up + y_down),
+                                   0.5 * (x_up + x_down))[0, 1])
+
+        antithetic_factor = 1.0 / (1.0 + rho_a)
+        control_factor = 1.0 / (1.0 - rho_xy ** 2)
+        both_factor = antithetic_factor / (1.0 - rho_ab ** 2)
+        product = antithetic_factor * control_factor
+        rows.append({
+            "option": option.label,
+            "kind": option.kind,
+            "S": option.S,
+            "K": option.K,
+            "T": "%.6f" % option.T,
+            "sample_paths": sample,
+            "rho_antithetic": "%.6f" % rho_a,
+            "rho_payoff_control": "%.6f" % rho_xy,
+            "rho_pair_payoff_control": "%.6f" % rho_ab,
+            "antithetic_factor": "%.4f" % antithetic_factor,
+            "control_factor": "%.4f" % control_factor,
+            "both_factor": "%.4f" % both_factor,
+            "product_of_factors": "%.4f" % product,
+            "both_over_product": "%.4f" % (both_factor / product),
+            "predicted_ratio": "%.4f" % ((1 - rho_xy ** 2) / (1 - rho_ab ** 2)),
+        })
+        print("  %-18s rho_A %+.3f  rho_XY %+.3f  rho_AB %+.3f  "
+              "both %.1fx vs product %.1fx (%.2fx)"
+              % (option.label, rho_a, rho_xy, rho_ab, both_factor, product,
+                 both_factor / product))
+    write_csv("vr_combination.csv", list(rows[0]), rows)
+
+
 def main() -> None:
     RESULTS.mkdir(exist_ok=True)
     started = time.perf_counter()
@@ -227,6 +300,7 @@ def main() -> None:
     run_straddle()
     run_control_bias()
     run_coverage_rescue()
+    run_combination_decomposition()
     print(f"\ndone in {time.perf_counter() - started:.0f} s")
     print("now run: python analysis/plot_phase4.py")
 
