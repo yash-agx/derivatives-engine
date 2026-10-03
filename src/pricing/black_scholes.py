@@ -67,42 +67,29 @@ import math
 
 from scipy.stats import norm
 
-CALL = "call"
-PUT = "put"
-KINDS = (CALL, PUT)
+from .common import CALL, KINDS, PUT, check_kind, validate_inputs
+
+__all__ = [
+    "CALL",
+    "PUT",
+    "KINDS",
+    "GREEK_NAMES",
+    "d1_d2",
+    "call_price",
+    "put_price",
+    "price",
+    "delta",
+    "gamma",
+    "vega",
+    "theta",
+    "rho",
+    "greeks",
+]
 
 # If sigma*sqrt(T) is below this, there is (numerically) no randomness left in
 # the payoff: d1 and d2 would blow up to +/- infinity. We switch to the
 # certain-payoff formulas instead. See _degenerate_price.
 _NO_VOL = 1e-12
-
-
-def _check_kind(kind: str) -> str:
-    if kind not in KINDS:
-        raise ValueError(f"kind must be 'call' or 'put', got {kind!r}")
-    return kind
-
-
-def _validate(S: float, K: float, r: float, sigma: float, T: float) -> None:
-    """Reject inputs the formulas cannot mean anything for.
-
-    ``r`` is deliberately unconstrained -- negative rates are real.
-    ``S`` and ``K`` must be strictly positive because the formulas take
-    ``ln(S/K)``.
-    """
-    # Finiteness first: NaN fails every comparison below, so checking it here
-    # is what makes the error message say what is actually wrong.
-    for name, value in (("S", S), ("K", K), ("r", r), ("sigma", sigma), ("T", T)):
-        if math.isnan(value) or math.isinf(value):
-            raise ValueError(f"{name} must be a finite number, got {value}")
-    if not S > 0:
-        raise ValueError(f"S (spot) must be > 0, got {S}")
-    if not K > 0:
-        raise ValueError(f"K (strike) must be > 0, got {K}")
-    if sigma < 0:
-        raise ValueError(f"sigma (volatility) must be >= 0, got {sigma}")
-    if T < 0:
-        raise ValueError(f"T (years to expiry) must be >= 0, got {T}")
 
 
 def d1_d2(S: float, K: float, r: float, sigma: float, T: float) -> tuple[float, float]:
@@ -142,7 +129,7 @@ def _degenerate_price(S: float, K: float, r: float, T: float, kind: str) -> floa
 
 def call_price(S: float, K: float, r: float, sigma: float, T: float) -> float:
     """Black-Scholes price of a European call."""
-    _validate(S, K, r, sigma, T)
+    validate_inputs(S, K, r, sigma, T)
     if _is_degenerate(sigma, T):
         return _degenerate_price(S, K, r, T, CALL)
     d1, d2 = d1_d2(S, K, r, sigma, T)
@@ -158,7 +145,7 @@ def put_price(S: float, K: float, r: float, sigma: float, T: float) -> float:
     over. ``N(-d2) = 1 - N(d2)`` is the risk-neutral probability of finishing
     in the money for a put.
     """
-    _validate(S, K, r, sigma, T)
+    validate_inputs(S, K, r, sigma, T)
     if _is_degenerate(sigma, T):
         return _degenerate_price(S, K, r, T, PUT)
     d1, d2 = d1_d2(S, K, r, sigma, T)
@@ -170,7 +157,7 @@ def price(S: float, K: float, r: float, sigma: float, T: float, kind: str) -> fl
 
     Convenience for loops and tests that run over both option types.
     """
-    _check_kind(kind)
+    check_kind(kind)
     if kind == CALL:
         return call_price(S, K, r, sigma, T)
     return put_price(S, K, r, sigma, T)
@@ -264,8 +251,8 @@ def delta(S: float, K: float, r: float, sigma: float, T: float, kind: str) -> fl
     ``call delta - put delta = 1`` always -- that is the derivative of
     put-call parity with respect to ``S``.
     """
-    _validate(S, K, r, sigma, T)
-    _check_kind(kind)
+    validate_inputs(S, K, r, sigma, T)
+    check_kind(kind)
     if _is_degenerate(sigma, T):
         return _degenerate_greeks(S, K, r, T, kind)["delta"]
     d1, _ = d1_d2(S, K, r, sigma, T)
@@ -292,8 +279,8 @@ def gamma(S: float, K: float, r: float, sigma: float, T: float, kind: str = CALL
     a small move flips the option between "worth nothing" and "worth
     intrinsic".
     """
-    _validate(S, K, r, sigma, T)
-    _check_kind(kind)
+    validate_inputs(S, K, r, sigma, T)
+    check_kind(kind)
     if _is_degenerate(sigma, T):
         return _degenerate_greeks(S, K, r, T, kind)["gamma"]
     d1, _ = d1_d2(S, K, r, sigma, T)
@@ -315,8 +302,8 @@ def vega(S: float, K: float, r: float, sigma: float, T: float, kind: str = CALL)
     options are the vol-sensitive ones, while gamma is a short-dated
     phenomenon. Divide by 100 for the desk convention "dollars per vol point".
     """
-    _validate(S, K, r, sigma, T)
-    _check_kind(kind)
+    validate_inputs(S, K, r, sigma, T)
+    check_kind(kind)
     if _is_degenerate(sigma, T):
         return _degenerate_greeks(S, K, r, T, kind)["vega"]
     d1, _ = d1_d2(S, K, r, sigma, T)
@@ -351,8 +338,8 @@ def theta(S: float, K: float, r: float, sigma: float, T: float, kind: str) -> fl
 
     Divide by 365 for the "per day" number desks quote.
     """
-    _validate(S, K, r, sigma, T)
-    _check_kind(kind)
+    validate_inputs(S, K, r, sigma, T)
+    check_kind(kind)
     if _is_degenerate(sigma, T):
         return _degenerate_greeks(S, K, r, T, kind)["theta"]
     d1, d2 = d1_d2(S, K, r, sigma, T)
@@ -378,8 +365,8 @@ def rho(S: float, K: float, r: float, sigma: float, T: float, kind: str) -> floa
     factor ``T`` out front -- which is why it is usually the last one anyone
     mentions. Divide by 100 for "per 1% of rate".
     """
-    _validate(S, K, r, sigma, T)
-    _check_kind(kind)
+    validate_inputs(S, K, r, sigma, T)
+    check_kind(kind)
     if _is_degenerate(sigma, T):
         return _degenerate_greeks(S, K, r, T, kind)["rho"]
     _, d2 = d1_d2(S, K, r, sigma, T)
@@ -396,7 +383,7 @@ def greeks(S: float, K: float, r: float, sigma: float, T: float, kind: str) -> d
     is deliberate for now: each formula lives in exactly one place, which is
     what keeps the tests meaningful. Phase 5 is where speed matters.
     """
-    _check_kind(kind)
+    check_kind(kind)
     return {
         "delta": delta(S, K, r, sigma, T, kind),
         "gamma": gamma(S, K, r, sigma, T, kind),
