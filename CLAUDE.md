@@ -22,10 +22,18 @@ Research question for the final write-up:
 
 ## Phases
 
-### Phase 1 — Analytical pricing
-- [ ] Black-Scholes price for European call and put
-- [ ] Greeks: Delta, Gamma, Vega, Theta, Rho
-- [ ] Check put-call parity holds; check Greeks against finite differences
+### Phase 1 — Analytical pricing ✅
+- [x] Black-Scholes price for European call and put — `src/pricing/black_scholes.py`
+- [x] Greeks: Delta, Gamma, Vega, Theta, Rho (both option types, plus a `greeks()` dict)
+- [x] Check put-call parity holds; check Greeks against finite differences
+
+2,669 tests pass (`.\.venv\Scripts\python.exe -m pytest`):
+- `tests/test_prices.py` — Hull's worked examples, parity over a 108-point grid, no-arbitrage
+  bounds, monotonicity in S, sigma and T
+- `tests/test_greeks.py` — Hull's Greeks example, every Greek against a central finite difference,
+  the five Greek parity relations, signs and ranges, where gamma and vega peak
+- `tests/test_edge_cases.py` — T = 0 and sigma = 0, one-second and 100-year expiries, vol from
+  1e-8 to 10, moneyness from 1e-6 to 1e6, and invalid inputs
 
 ### Phase 2 — Numerical pricing
 - [ ] Binomial tree (Cox-Ross-Rubinstein), European and American options
