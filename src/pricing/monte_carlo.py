@@ -56,7 +56,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm
 
-from .common import check_kind, payoff, validate_inputs
+from .common import check_payoff_kind, payoff, validate_inputs
 
 __all__ = [
     "MonteCarloResult",
@@ -157,7 +157,7 @@ def simulate_discounted_payoffs(
     lopsided this distribution is.
     """
     validate_inputs(S, K, r, sigma, T)
-    check_kind(kind)
+    check_payoff_kind(kind)
     terminal_spots = simulate_terminal_spots(S, r, sigma, T, n_paths=n_paths, seed=seed)
     return math.exp(-r * T) * payoff(terminal_spots, K, kind)
 
@@ -185,7 +185,7 @@ def monte_carlo_price(
     textbook ``s / sqrt(N)``.
     """
     validate_inputs(S, K, r, sigma, T)
-    check_kind(kind)
+    check_payoff_kind(kind)
     if int(n_paths) != n_paths or n_paths < 2:
         raise ValueError(
             f"n_paths must be a whole number >= 2 (a standard error needs at "

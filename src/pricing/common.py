@@ -18,13 +18,29 @@ import numpy as np
 
 CALL = "call"
 PUT = "put"
+STRADDLE = "straddle"
+
+#: What the Greeks and the binomial tree accept. They branch on call-versus-put
+#: internally, so a third kind would quietly produce a wrong number.
 KINDS = (CALL, PUT)
+#: What ``payoff()`` and the Black-Scholes ``price()`` accept. A straddle is
+#: just a call plus a put on the same strike, so both are well defined for it.
+PAYOFF_KINDS = (CALL, PUT, STRADDLE)
 
 
 def check_kind(kind: str) -> str:
     """Reject anything that is not ``"call"`` or ``"put"``."""
     if kind not in KINDS:
         raise ValueError(f"kind must be 'call' or 'put', got {kind!r}")
+    return kind
+
+
+def check_payoff_kind(kind: str) -> str:
+    """Reject anything that is not a payoff this project can price."""
+    if kind not in PAYOFF_KINDS:
+        raise ValueError(
+            f"kind must be 'call', 'put' or 'straddle', got {kind!r}"
+        )
     return kind
 
 
@@ -53,14 +69,17 @@ def validate_inputs(S: float, K: float, r: float, sigma: float, T: float) -> Non
 def payoff(spot, K: float, kind: str):
     """Exercise value of the option: what it is worth if exercised right now.
 
-    ``max(S - K, 0)`` for a call, ``max(K - S, 0)`` for a put. This is the
-    whole definition of an option -- every pricing model in the project is
-    ultimately just a different way of averaging and discounting this number.
+    ``max(S - K, 0)`` for a call, ``max(K - S, 0)`` for a put, and ``|S - K|``
+    for a straddle (owning both). This is the whole definition of an option --
+    every pricing model in the project is ultimately just a different way of
+    averaging and discounting this number.
 
     Works on a single spot or on a NumPy array of them, which is what the tree
     (a whole layer of nodes) and the simulation (a whole batch of paths) need.
     """
-    check_kind(kind)
+    check_payoff_kind(kind)
     if kind == CALL:
         return np.maximum(spot - K, 0.0)
-    return np.maximum(K - spot, 0.0)
+    if kind == PUT:
+        return np.maximum(K - spot, 0.0)
+    return np.abs(spot - K)

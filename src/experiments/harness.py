@@ -48,7 +48,7 @@ import numpy as np
 from scipy.stats import kurtosis, norm, skew
 
 from pricing.black_scholes import price as black_scholes_price
-from pricing.common import CALL, check_kind
+from pricing.common import CALL, check_payoff_kind
 from pricing.monte_carlo import (
     MonteCarloResult,
     monte_carlo_price,
@@ -82,7 +82,9 @@ class Option:
     kind: str = CALL
 
     def __post_init__(self) -> None:
-        check_kind(self.kind)
+        # The wider set: an Option only ever needs payoff() and price(), both of
+        # which handle a straddle. The Greeks keep the strict check.
+        check_payoff_kind(self.kind)
 
     @property
     def args(self) -> tuple:
