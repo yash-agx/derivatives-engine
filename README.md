@@ -15,10 +15,10 @@ performance work in Phase 5.
 | 1 | Black-Scholes prices and the five Greeks | **done** |
 | 2 | Binomial tree (CRR), European and American; Monte Carlo under GBM | **done** |
 | 3 | Monte Carlo convergence: error, standard error, runtime, the 1/√N law | **done** |
-| 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | not started |
+| 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | **done** |
 | 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | not started |
 
-2,856 tests pass across the three models and the experiment harness.
+2,913 tests pass across the models, the harness and the variance-reduced estimators.
 
 **Phase 1** — `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
 types: Hull's worked examples, put-call parity, every Greek against a central finite difference,
@@ -29,6 +29,9 @@ geometric Brownian motion, with the convergence and coverage experiments below.
 
 **Phase 3** — a reusable experiment harness, and a convergence study over 16 options × 4 path
 counts × 500 seeds.
+
+**Phase 4** — antithetic variates, a control variate, both combined, and importance sampling, all
+measured through the same harness at equal path counts.
 
 ## Phase 2 results
 
@@ -144,25 +147,98 @@ buys less accuracy per second than a medium one, and the sweet spot here is arou
 Phase 4 therefore compares estimators at equal path counts.
 
 
+## Phase 4 results
+
+Run `python analysis/run_phase4.py` (~2.5 min) then `python analysis/plot_phase4.py`.
+
+### What each method buys
+
+![Variance reduction and cost](results/vr_variance_reduction.png)
+
+Variance reduction at 100,000 paths, equal path budget (above 1 is an improvement):
+
+| option | antithetic | control | both | importance |
+|---|---|---|---|---|
+| ATM 1y | 1.7x | 6.2x | **28x** | 0.7x |
+| OTM 5y | 1.4x | 10.7x | **44x** | 0.8x |
+| deep ITM 1y | 9.3x | 111x | **521x** | 0.0x |
+| K=160 6m | 0.9x | 1.0x | 0.9x | **1,745x** |
+
+Combining antithetic and control multiplies rather than adds — they remove different things.
+Antithetic is also slightly *faster* than plain (it needs half as many random numbers), so cost
+and variance rank together almost everywhere.
+
+Every method's error bar stayed honest. The antithetic standard error gets the most scrutiny
+because it is the easy one to get wrong: computed over **pairs** it matches the true standard
+error to 1.0002, while computing it over paths would be wrong in both directions — too small for
+a call, too large for a straddle.
+
+### Where they fail
+
+![Antithetic on a straddle](results/vr_straddle.png)
+
+Antithetic variates need the payoff to be monotone in the random draw. A straddle pays
+`|S_T - K|`, so both legs of a pair are large together and pairing *concentrates* variance:
+**0.60x at K=100**, recovering to 10.5x at K=70 and 3.2x at K=130. The worst point brackets the
+median terminal price (103.05), not the spot.
+
+The control variate has the opposite failure — it works *too* well. Deep in the money the payoff
+is an exact affine function of the control, so variance falls 14,000,000x and the residual is the
+rare event of finishing below the strike. At 100,000 paths 83% of runs never sample it, report a
+standard error below 1e-12, and miss: **coverage 0.158**, against 0.952 for plain. Variance
+reduction manufactured the Phase 3 rare-event failure.
+
+### Fitting the control coefficient on the same paths biases it
+
+![Control-variate bias](results/vr_control_bias.png)
+
+Measured over 20,000 seeds: **−0.147 (−25σ)** at N=50, −0.038 (−13σ) at N=200, −0.0058 (−4.7σ) at
+N=1,000 — falling like 1/N. A pilot sample removes it entirely, costing 7–35% more spread. By
+N=10,000 the bias is under 1% of a standard deviation, so the default fits on the same paths.
+
+### The key experiment: only importance sampling fixes broken coverage
+
+![Coverage rescue](results/vr_coverage_rescue.png)
+
+| strike (6m) | plain | antithetic | control | both | importance |
+|---|---|---|---|---|---|
+| K=140 | 0.876 | 0.886 | 0.876 | 0.878 | **0.962** |
+| K=160 | 0.404 | 0.426 | 0.404 | 0.418 | **0.940** |
+| K=180 | 0.026 | 0.024 | 0.026 | 0.024 | **0.942** |
+| K=200 | 0.000 | 0.000 | 0.000 | 0.000 | **0.934** |
+
+Coverage of the 95% interval at N=1,000. The classical methods shrink the spread of an estimator
+whose *shape* is the problem, and leave coverage exactly where it was. Importance sampling shifts
+the drift by −d2 so the strike sits at the median, then reweights by the likelihood ratio — it is
+the only method that changes **where the paths go**, which is what a rare-event failure is about.
+
+
 ## Layout
 
 ```
-src/pricing/common.py          option kinds, input validation, the exercise payoff
-src/pricing/black_scholes.py   closed-form prices and Greeks
-src/pricing/binomial.py        Cox-Ross-Rubinstein tree, European and American
-src/pricing/monte_carlo.py     GBM simulation with standard error and confidence interval
-tests/                         pytest suite (textbook values, parity, finite differences,
-                               edge cases, CI coverage)
-analysis/run_phase2.py         runs the experiments, writes results/*.csv
-analysis/plot_phase2.py        reads the CSVs, prints the tables, writes results/*.png
-results/                       experiment CSVs and charts (committed, so the write-up can cite them)
-requirements.txt               numpy, scipy, matplotlib, pytest
-pytest.ini                     puts src/ on the import path
+src/pricing/common.py              option kinds, input validation, the exercise payoff
+src/pricing/black_scholes.py       closed-form prices and Greeks
+src/pricing/binomial.py            Cox-Ross-Rubinstein tree, European and American
+src/pricing/monte_carlo.py         GBM simulation with standard error and confidence interval
+src/pricing/variance_reduction.py  antithetic, control variate, both, importance sampling
+src/experiments/harness.py         measures any estimator: bias, RMSE, coverage, runtime, cost
+tests/                             pytest suite (textbook values, parity, finite differences,
+                                   edge cases, CI coverage, calibrated fake estimators)
+analysis/run_phase{2,3,4}.py       run the experiments, write results/*.csv
+analysis/plot_phase{2,3,4}.py      read the CSVs, print the tables, write results/*.png
+results/                           experiment CSVs and charts (committed, so the write-up can cite them)
+requirements.txt                   numpy, scipy, matplotlib, pytest
+pytest.ini                         puts src/ on the import path
 ```
 
+`pricing` answers "what is this option worth?"; `experiments` answers "how well does that method
+work, and what does it cost?" — which is the actual research question. The harness takes any
+`estimator(option, n_paths, seed)`, so every method from plain Monte Carlo to importance sampling
+is measured by identical code at equal path budgets.
+
 Every docstring explains the maths before the code: what `d1` and `d2` mean, why `d = 1/u` makes
-the tree recombine, where the risk-neutral probability comes from, and why the Monte Carlo error
-can only shrink like 1/√N.
+the tree recombine, where the risk-neutral probability comes from, why the Monte Carlo error can
+only shrink like 1/√N, and why an antithetic standard error has to be computed over pairs.
 
 ## Running
 

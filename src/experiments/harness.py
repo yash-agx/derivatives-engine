@@ -32,8 +32,9 @@ pricer directly: it takes any callable with the signature::
 
     estimator(option, n_paths, seed) -> MonteCarloResult
 
-``plain_monte_carlo`` below is the Phase 3 instance. Phase 4 adds more, changes
-nothing here, and the comparison is automatically like for like.
+``plain_monte_carlo`` below is the Phase 3 instance; Phase 4's four methods sit
+beside it in ``ESTIMATORS``, and adding them changed nothing else in this
+module, so the comparison is like for like by construction.
 """
 
 from __future__ import annotations
@@ -54,11 +55,22 @@ from pricing.monte_carlo import (
     monte_carlo_price,
     simulate_discounted_payoffs,
 )
+from pricing.variance_reduction import (
+    antithetic_control_monte_carlo,
+    antithetic_monte_carlo,
+    control_variate_monte_carlo,
+    importance_sampling_monte_carlo,
+)
 
 __all__ = [
     "Option",
     "Estimator",
     "plain_monte_carlo",
+    "antithetic",
+    "control_variate",
+    "antithetic_control",
+    "importance_sampling",
+    "ESTIMATORS",
     "SeedStudy",
     "PayoffShape",
     "run_seed_study",
@@ -108,6 +120,41 @@ Estimator = Callable[[Option, int, int], MonteCarloResult]
 def plain_monte_carlo(option: Option, n_paths: int, seed: int) -> MonteCarloResult:
     """The Phase 3 estimator: ordinary Monte Carlo, no variance reduction."""
     return monte_carlo_price(*option.args, option.kind, n_paths=n_paths, seed=seed)
+
+
+def antithetic(option: Option, n_paths: int, seed: int) -> MonteCarloResult:
+    """Phase 4: antithetic pairs, standard error computed over pairs."""
+    return antithetic_monte_carlo(*option.args, option.kind, n_paths=n_paths, seed=seed)
+
+
+def control_variate(option: Option, n_paths: int, seed: int) -> MonteCarloResult:
+    """Phase 4: the discounted terminal stock price as a control."""
+    return control_variate_monte_carlo(*option.args, option.kind, n_paths=n_paths,
+                                       seed=seed)
+
+
+def antithetic_control(option: Option, n_paths: int, seed: int) -> MonteCarloResult:
+    """Phase 4: both, with the control applied to the pair averages."""
+    return antithetic_control_monte_carlo(*option.args, option.kind, n_paths=n_paths,
+                                          seed=seed)
+
+
+def importance_sampling(option: Option, n_paths: int, seed: int) -> MonteCarloResult:
+    """Phase 4: drift shifted to put the strike at the median, then reweighted."""
+    return importance_sampling_monte_carlo(*option.args, option.kind, n_paths=n_paths,
+                                           seed=seed)
+
+
+#: The estimators this project compares, in the order they are reported.
+#: Every one takes (option, n_paths, seed) and spends the same path budget, so
+#: the harness measures them all with identical code at equal cost.
+ESTIMATORS = {
+    "plain": plain_monte_carlo,
+    "antithetic": antithetic,
+    "control": control_variate,
+    "anti+control": antithetic_control,
+    "importance": importance_sampling,
+}
 
 
 @dataclass(frozen=True)

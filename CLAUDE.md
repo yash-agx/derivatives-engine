@@ -144,11 +144,105 @@ across path counts measures the memory system as much as the method.
 - The rare-event failure is a property of crude Monte Carlo, not of simulation in general.
   Importance sampling targets exactly this case and is not in this project's scope.
 
-### Phase 4 — Advanced Monte Carlo
-- [ ] Antithetic variates
-- [ ] Control variates (e.g. underlying asset as control)
-- [ ] Compare standard vs variance-reduced: accuracy, variance, runtime, convergence rate
-- [ ] Variance reduction factor and "time-adjusted efficiency" (variance × runtime)
+### Phase 4 — Advanced Monte Carlo ✅
+- [x] Antithetic variates — standard error computed over **pairs**, not paths
+- [x] Control variates (discounted terminal stock price, known mean exactly `S`)
+- [x] Both combined; plus importance sampling, added to attack the Phase 3 coverage failure
+- [x] Compare standard vs variance-reduced: accuracy, variance, runtime, convergence rate
+- [x] Variance reduction factor and "time-adjusted efficiency" (variance × runtime)
+
+All four live in `src/pricing/variance_reduction.py` with the same signature as plain Monte
+Carlo, so they run through the Phase 3 harness unchanged. **Every comparison is at equal path
+counts**, because runtime per path is not constant in N.
+
+Experiments: `python analysis/run_phase4.py` (~2.5 min), then `python analysis/plot_phase4.py`.
+2,913 tests pass.
+
+#### Findings
+
+**Variance reduction at 100,000 paths** (factor = variance of plain / variance of the method;
+above 1 is an improvement):
+
+| option | antithetic | control | both | importance |
+|---|---|---|---|---|
+| ATM 1y | 1.7x | 6.2x | **28x** | 0.7x |
+| OTM 5y | 1.4x | 10.7x | **44x** | 0.8x |
+| deep ITM 1y | 9.3x | 111x | **521x** | 0.0x |
+| ATM 1y put | 1.5x | 2.3x | **10x** | 1.4x |
+| K=160 6m (the Phase 3 failure) | 0.9x | 1.0x | 0.9x | **1,745x** |
+
+Antithetic is the weakest and the cheapest; the control variate is much stronger; combining them
+multiplies rather than adds, because they remove different things. Runtime cost is small
+(antithetic is actually ~0.75x plain, since it needs half as many random numbers), so the
+cost ranking matches the variance ranking almost everywhere.
+
+**Every error bar stayed honest** where the estimator itself was sound: reported standard error
+over actual spread stayed near 1 for all four methods. The antithetic SE was checked hardest
+because it is the easy one to get wrong — computed over pairs it matches the true standard error
+to **1.0002**; computed over paths it would be wrong in *both* directions (too small for a call,
+where the legs are negatively correlated, too large for a straddle, where they are positively
+correlated).
+
+**Where each method fails** — the more useful half of the results:
+
+- **Antithetic on a symmetric payoff.** A straddle pays `|S_T - K|`, which is not monotone in
+  the draw, so the two legs of a pair move together and pairing concentrates variance instead of
+  cancelling it. Sweeping the strike: 10.5x at K=70, 2.1x at K=85, **0.60x at K=100**, 0.78x at
+  K=115, 3.2x at K=130. The worst point brackets the *median terminal price* (103.05), not the
+  spot — which is exactly where the reflected payoff is most nearly even.
+- **Importance sampling on anything that did not need it.** At the money it costs 30% (0.7x); in
+  the money it is far worse. The shift solves a problem those options do not have, and the
+  likelihood-ratio weights add variance of their own.
+- **The control variate succeeding too well.** Deep in the money (S=130, K=100, one month) the
+  payoff is an *exact* affine function of the control, so the residual is a constant and variance
+  falls by 14 million times. But the option is the forward minus a put worth 2.6e-6, and that put
+  only appears on paths finishing below the strike (probability 2.2e-6). At 100,000 paths **83%
+  of runs contain no such path**, report a standard error below 1e-12, and miss. Coverage: 0.158,
+  against 0.952 for plain Monte Carlo on the same option. **Variance reduction manufactured the
+  Phase 3 rare-event failure**: it removed all the variance it could see and left a pure
+  rare-event problem behind.
+
+**The control coefficient must not be fitted on the paths it is used on** — at small N. Measured
+over 20,000 seeds, the same-sample bias is **-0.147 (-25 standard errors)** at N=50, **-0.038
+(-13 se)** at N=200 and **-0.0058 (-4.7 se)** at N=1,000, falling like 1/N as theory says. A
+pilot sample removes it completely (every pilot run within 1.4 se of zero) at the cost of 7-35%
+more spread. At the N=10,000-100,000 used for the comparisons the bias is under ~1% of a standard
+deviation, which is why the default fits on the same paths.
+
+**The key experiment: only importance sampling fixes broken coverage.** Antithetic, control and
+both together leave it exactly where it was, because they shrink the spread of an estimator whose
+*shape* is the problem:
+
+| strike (6m) | plain | antithetic | control | both | importance |
+|---|---|---|---|---|---|
+| K=140 | 0.876 | 0.886 | 0.876 | 0.878 | **0.962** |
+| K=160 | 0.404 | 0.426 | 0.404 | 0.418 | **0.940** |
+| K=180 | 0.026 | 0.024 | 0.026 | 0.024 | **0.942** |
+| K=200 | 0.000 | 0.000 | 0.000 | 0.000 | **0.934** |
+
+(coverage at N=1,000, 500 seeds). Importance sampling also restores the fully degenerate Phase 3
+case — the deep-OTM one-month call where every single path pays zero — from coverage 0.000 to
+0.940. It is the only method here that changes *where the paths go* rather than how they are
+averaged, and the rare-event failure is a problem of where the paths go.
+
+#### Limitations
+- The control variate is the discounted stock, which correlates well with a vanilla call and
+  badly with anything far out of the money (1.0x at K=160). A better control for those would be a
+  closed-form option at a nearer strike; not tried.
+- The importance-sampling shift puts the strike at the median, which is the explainable choice,
+  not the variance-optimal one. A larger shift is known to be better for deep out-of-the-money
+  options, and the optimal shift is not computed here.
+- Importance sampling needs to know *where* the payoff lives. That is obvious for a vanilla call
+  and not obvious in general, which is the practical catch: the method that fixes rare events
+  requires already understanding the rare event.
+- Coverage is measured over 500 seeds, resolving it only to ±0.019 — and **all 16 options share
+  the same seed set**, so an unlucky set moves them together rather than independently. Antithetic
+  coverage read ~0.92 across the whole grid at 500 seeds, which looked systematic; at 5,000 seeds
+  it is 0.944-0.948, i.e. nominal. Treat any single 500-seed coverage figure within ~0.03 of 0.95
+  as noise.
+- Variance reduction factors above about 1,000 should be read with the coverage column beside
+  them — see the deep-in-the-money control variate above.
+- Still only GBM with constant volatility and no dividends, and only European payoffs.
 
 ### Phase 5 — Performance engineering
 - [ ] Re-implement the Monte Carlo core in C++
