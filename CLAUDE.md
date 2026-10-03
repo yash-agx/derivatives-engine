@@ -116,12 +116,15 @@ information. By N=100,000 the same option is back to skew −0.62 and 93.2% cove
 call, and 130M paths (3.6 s) for the deep-in-the-money five-year. One extra decimal place costs
 100× the paths, which is the whole case for Phase 4.
 
-**Efficiency is not flat in N, and the reason is the machine.** Variance falls exactly like 1/N,
-but runtime per path is U-shaped: 189 ns at N=1,000 (dominated by fixed per-call overhead),
-27 ns at N=100,000, 33 ns at N=1,000,000 (arrays no longer fitting in cache). So `variance ×
-runtime` climbs from 3.2e-6 to 7.7e-6 before flattening. **Consequence for Phase 4: compare
-estimators at the same path count.** Comparing across path counts measures the memory system as
-much as the method.
+**Efficiency gets worse at large N, and the reason is the machine.** `variance × runtime` is a
+**cost**: lower is better, because it is the price of a unit of accuracy. In theory it is flat in
+N (variance falls like 1/N, runtime rises like N). Measured, the variance half is exact but
+runtime per path is U-shaped: 189 ns at N=1,000 (dominated by fixed per-call overhead), 27 ns at
+N=100,000, 33 ns at N=1,000,000 (arrays no longer fitting in cache). So the cost **rises** from
+3.2e-6 at N=100,000 to 7.7e-6 at N=400,000 before flattening — i.e. a big batch buys *less*
+accuracy per second than a medium one. The cheapest accuracy on this machine is around
+N=100,000. **Consequence for Phase 4: compare estimators at the same path count.** Comparing
+across path counts measures the memory system as much as the method.
 
 #### Limitations
 - Measured against Black-Scholes, which exists only because these are vanilla European options.

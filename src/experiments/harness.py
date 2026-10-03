@@ -20,8 +20,8 @@ the estimator ``n_seeds`` times at each path count and reports:
   would reveal it.
 * **coverage** -- how often the 95% interval really contains the true price.
 * **runtime** -- the median over the repeated runs.
-* **efficiency** -- variance times runtime, the standard way to compare
-  estimators that trade accuracy against speed.
+* **efficiency** -- variance times runtime. This is a *cost*: the price of a
+  unit of accuracy, so lower is better and a rising number means worse.
 
 Why it is built around an estimator *function*
 -----------------------------------------------
@@ -212,18 +212,23 @@ class SeedStudy:
     def variance_times_runtime(self) -> float:
         """Efficiency: estimator variance times the time one run costs.
 
-        Lower is better. In theory this is *constant in N* -- doubling the
-        paths halves the variance and doubles the time -- which would make it a
-        property of the method rather than of the budget, and so the right
-        yardstick for comparing Phase 4's estimators against this one.
+        This is a **cost** -- what a unit of accuracy is worth paying for -- so
+        **lower is better and a rising number means the method got worse**.
+
+        In theory it is *constant in N*: doubling the paths halves the variance
+        and doubles the time. That would make it a property of the method
+        rather than of the budget, and so the right yardstick for comparing
+        Phase 4's estimators against this one.
 
         Measured here, only half of that holds. The variance does fall exactly
         like 1/N (2.06x, 2.01x, 1.90x, 2.03x per doubling from N=50,000 to
         800,000). The runtime does not rise like N: 1.95x, 3.23x, 2.81x, 2.01x
         per doubling over the same range, because somewhere past 100,000 paths
         the arrays stop fitting in cache and each path starts costing more. So
-        the product climbs from 3.2e-6 at N=100,000 to 7.7e-6 at N=400,000
-        before flattening off around 7.6e-6.
+        the cost **rises** from 3.2e-6 at N=100,000 to 7.7e-6 at N=400,000
+        before flattening off around 7.6e-6: a large batch buys less accuracy
+        per second than a medium one, and the cheapest accuracy on this machine
+        is near N=100,000.
 
         The practical consequence, and it matters for Phase 4: compare
         estimators **at the same path count**. Comparing across path counts

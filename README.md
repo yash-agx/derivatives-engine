@@ -136,10 +136,12 @@ A ±1 cent 95% error bar costs **8.3M paths (0.23 s)** for the at-the-money one-
 to **130M paths (3.6 s)** deep in the money at five years. One more decimal place costs 100× the
 paths — the case for Phase 4's variance reduction.
 
-Variance falls exactly like 1/N, but runtime per path is U-shaped (189 ns at N=1,000 from fixed
-per-call overhead, 27 ns at N=100,000, 33 ns at N=1,000,000 as the arrays leave cache), so
-`variance × runtime` is *not* flat in N. Phase 4 therefore compares estimators at equal path
-counts.
+`variance × runtime` is a **cost** — the price of a unit of accuracy, so lower is better. Theory
+says it should be flat in N. It is not: variance falls exactly like 1/N, but runtime per path is
+U-shaped (189 ns at N=1,000 from fixed per-call overhead, 27 ns at N=100,000, 33 ns at
+N=1,000,000 as the arrays leave cache), so the cost *rises* from 3.2e-6 to 7.7e-6. A big batch
+buys less accuracy per second than a medium one, and the sweet spot here is around N=100,000.
+Phase 4 therefore compares estimators at equal path counts.
 
 
 ## Layout
