@@ -261,7 +261,9 @@ def print_shape_table(rows: list) -> None:
 
 def print_efficiency_table(rows: list) -> None:
     print("\n\nEFFICIENCY AND COST")
-    print("variance x runtime should characterise the method rather than the budget.")
+    print("variance x runtime is a COST (lower is better): the price of a unit of")
+    print("accuracy. In theory it is flat in N; here it rises, so large batches are")
+    print("less efficient than medium ones.")
     print("'paths for 1 cent' is what a 95% error bar of +/-$0.01 costs.\n")
     print(f"{'option':>14} {'paths':>10} {'var x t':>11} {'ns/path':>9} "
           f"{'paths for 1c':>16} {'implied time':>13}")
@@ -500,8 +502,9 @@ def plot_efficiency(rows: list) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(15.0, 5.0))
     fig.subplots_adjust(top=0.80, bottom=0.14, left=0.055, right=0.95, wspace=0.34)
     titles(fig, "What the accuracy costs",
-           "Efficiency is variance x runtime: it should depend on the method, not "
-           "on the path count. Here the memory system interferes.")
+           "variance x runtime is a cost -- the price of a unit of accuracy, so "
+           "lower is better. Theory says it is flat in N; the memory system says "
+           "otherwise.")
 
     series = one_year_calls(rows)
     runtime_ax, efficiency_ax, cost_ax = axes
@@ -533,9 +536,9 @@ def plot_efficiency(rows: list) -> None:
     efficiency_ax.set_xscale("log")
     efficiency_ax.set_yscale("log")
     efficiency_ax.set_xlabel("paths per run (log scale)")
-    efficiency_ax.set_ylabel("variance x runtime (log scale)")
-    efficiency_ax.set_title("So efficiency is not flat in N", fontsize=10, color=INK,
-                            loc="left")
+    efficiency_ax.set_ylabel("variance x runtime, lower is better (log scale)")
+    efficiency_ax.set_title("So a big batch costs more per unit of accuracy",
+                            fontsize=10, color=INK, loc="left")
 
     # Cost of a one-cent error bar, by option.
     # The deep-OTM one-month call is excluded here: every path pays zero, so its
