@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# C++ build output (Phase 5)
+build/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+*.exe
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+
+# Editors and tools
+.vscode/
+.vs/
+.idea/
+.claude/
+
+# Large or throwaway data (experiment CSVs and charts in results/ are kept on purpose)
+*.zip
+*.7z
+*.tar.gz
+*.log
