@@ -14,11 +14,11 @@ performance work in Phase 5.
 |---|---|---|
 | 1 | Black-Scholes prices and the five Greeks | **done** |
 | 2 | Binomial tree (CRR), European and American; Monte Carlo under GBM | **done** |
-| 3 | Monte Carlo convergence: error, standard error, runtime, the 1/√N law | not started |
+| 3 | Monte Carlo convergence: error, standard error, runtime, the 1/√N law | **done** |
 | 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | not started |
 | 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | not started |
 
-2,825 tests pass across the three models (660 + 151 + 1,858 Phase 1, 117 tree, 39 simulation).
+2,856 tests pass across the three models and the experiment harness.
 
 **Phase 1** — `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
 types: Hull's worked examples, put-call parity, every Greek against a central finite difference,
@@ -26,6 +26,9 @@ and the edge cases (expiry now, zero and extreme volatility, deep in and out of 
 
 **Phase 2** — a Cox-Ross-Rubinstein tree (European and American) and a Monte Carlo pricer under
 geometric Brownian motion, with the convergence and coverage experiments below.
+
+**Phase 3** — a reusable experiment harness, and a convergence study over 16 options × 4 path
+counts × 500 seeds.
 
 ## Phase 2 results
 
@@ -76,6 +79,68 @@ For a deep out-of-the-money call (worth 0.004, so almost every path pays nothing
 to **75.2%** at N=5,000, recovering to 87.4% and 93.2% as paths increase: the payoff is too skewed
 for the central limit theorem the interval relies on. The deep in-the-money put at the same strike
 covers 94.8–95.2%, which pins the cause on skewness rather than on moneyness.
+
+## Phase 3 results
+
+Run `python analysis/run_phase3.py` (~9 min) then `python analysis/plot_phase3.py`.
+
+Everything is measured over **500 independent seeds per point**, because one Monte Carlo run says
+nothing about a method — it gives one price and one self-reported error bar, both random.
+
+### The error falls like 1/√N, whatever the option
+
+![Monte Carlo convergence](results/mc_convergence.png)
+
+Fitted log-log slope of RMSE against paths: **−0.496** for the base case, **−0.490 to −0.501**
+across all 16 options. A 1,000× increase in paths buys a 30.5× accuracy improvement (theory:
+√1000 = 31.6). Only the constant in front changes between options.
+
+### The error bar is honest
+
+![Reported error vs actual spread](results/mc_error_honesty.png)
+
+Across all 64 points the reported standard error matches the actual spread of the 500 estimates
+to within **0.966–1.038**, over four orders of magnitude. That is what makes the standard error
+useful: it estimates an accuracy you could not otherwise see without already knowing the answer.
+
+### …until the payoff becomes a rare event
+
+![Coverage breakdown](results/mc_coverage.png)
+
+Coverage held at 0.93–0.96 across the whole moneyness × maturity grid — *including* a deep
+out-of-the-money call with payoff skewness 8.71. Being far out of the money is not enough to
+break the interval.
+
+What breaks it is how many paths pay anything at all. Pushing the strike from 120 to 200 at six
+months, both experiments collapse onto one curve:
+
+| expected paying paths | 0.03 | 0.65 | 3.2 | 13 | 57 | 118 | 1,145 | 236,016 |
+|---|---|---|---|---|---|---|---|---|
+| coverage | 0.026 | 0.404 | 0.752 | 0.874 | 0.928 | 0.948 | 0.952 | 0.952 |
+
+**Below about 50 paying paths per run the interval cannot be trusted; below 5 it is worthless.**
+
+![Sampling distributions](results/mc_sampling_distribution.png)
+
+The mechanism, drawn directly: standardising each estimate by its own reported standard error
+should give a standard normal. At N=1,000 the K=160 call instead gives a spike just below +1 with
+a long left tail — the "exactly one paying path" signature. With a single payoff `X` among `N`
+paths, the estimate is `X/N` and the standard error is also ≈ `X/N`, so the ratio pins near +1
+whatever `X` was. **The estimator is most confident precisely when it has least information.**
+
+### What the accuracy costs
+
+![Efficiency](results/mc_efficiency.png)
+
+A ±1 cent 95% error bar costs **8.3M paths (0.23 s)** for the at-the-money one-year call, rising
+to **130M paths (3.6 s)** deep in the money at five years. One more decimal place costs 100× the
+paths — the case for Phase 4's variance reduction.
+
+Variance falls exactly like 1/N, but runtime per path is U-shaped (189 ns at N=1,000 from fixed
+per-call overhead, 27 ns at N=100,000, 33 ns at N=1,000,000 as the arrays leave cache), so
+`variance × runtime` is *not* flat in N. Phase 4 therefore compares estimators at equal path
+counts.
+
 
 ## Layout
 
