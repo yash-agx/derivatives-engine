@@ -171,10 +171,39 @@ above 1 is an improvement):
 | ATM 1y put | 1.5x | 2.3x | **10x** | 1.4x |
 | K=160 6m (the Phase 3 failure) | 0.9x | 1.0x | 0.9x | **1,745x** |
 
-Antithetic is the weakest and the cheapest; the control variate is much stronger; combining them
-multiplies rather than adds, because they remove different things. Runtime cost is small
-(antithetic is actually ~0.75x plain, since it needs half as many random numbers), so the
+Antithetic is the weakest and the cheapest; the control variate is much stronger. Runtime cost is
+small (antithetic is actually ~0.75x plain, since it needs half as many random numbers), so the
 cost ranking matches the variance ranking almost everywhere.
+
+**Combining them is neither additive nor multiplicative.** Writing `Y` for a path's discounted
+payoff and `X` for its discounted terminal stock price:
+
+| method | factor | correlation it uses |
+|---|---|---|
+| antithetic | `1 / (1 + rho_A)` | `rho_A = Corr(Y(Z), Y(-Z))` |
+| control | `1 / (1 - rho_XY^2)` | `rho_XY = Corr(Y, X)` |
+| both | `1 / [(1 + rho_A)(1 - rho_AB^2)]` | `rho_AB = Corr(pair mean of Y, pair mean of X)` |
+
+So the combined factor is the antithetic factor times a control factor **recomputed on the pair
+averages**, and the ratio to the naive product is `(1 - rho_XY^2) / (1 - rho_AB^2)`. Measured on a
+4,000,000-path sample, this predicts the observed ratio exactly (2.110 predicted against 2.11
+measured for ATM 1m, 6.697 against 6.70 for OTM 1y).
+
+Which way it goes depends on whether pairing *helps* the control:
+- **Usually it helps a lot.** Antithetic averaging removes the odd part of both the payoff and the
+  control, and what is left correlates more tightly: `rho_XY = 0.924 -> rho_AB = 0.964` for the
+  ATM one-year call, so the combination comes in at **2.08x the product** (28.7x against a product
+  of 13.8x). Out of the money the lift is larger still (OTM 1y: 0.840 -> 0.978, **6.7x** the
+  product).
+- **It hurts when the control was already almost perfect.** Deep in the money the payoff is nearly
+  an exact linear function of the control (`rho_XY = 0.995`), and pairing throws away the very
+  component that made it work (`rho_AB = 0.990`): the combination is **0.46x the product** (536x
+  against 1171x). The one-month deep-ITM case is the extreme: a product of 4.0e9 against an actual
+  1.3e7.
+
+The earlier phrasing here ("multiplies rather than adds") was wrong in both directions, and the
+measured table is what corrected it: 1.7 x 6.2 = 10.5 but both = 28, while 9.3 x 111 = 1,032 but
+both = 521.
 
 **Every error bar stayed honest** where the estimator itself was sound: reported standard error
 over actual spread stayed near 1 for all four methods. The antithetic SE was checked hardest
