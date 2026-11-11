@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 .venv/
@@ -24,7 +24,6 @@ CMakeFiles/
 .vscode/
 .vs/
 .idea/
-.claude/
 
 # Large or throwaway data (experiment CSVs and charts in results/ are kept on purpose)
 *.zip
@@ -32,4 +31,3 @@ CMakeFiles/
 *.tar.gz
 *.log
 
-CLAUDE.md

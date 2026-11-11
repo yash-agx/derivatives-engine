@@ -335,3 +335,8 @@ assumptions the write-up has to discuss. Exercise style: European for Black-Scho
 and the variance-reduced and C++ estimators; the binomial tree prices **both European and
 American** exercise, which is what makes the American early-exercise premium in Phase 2
 measurable.
+
+
+## Notes
+
+Built with AI coding assistance. The design decisions and analysis are my own.
