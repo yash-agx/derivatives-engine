@@ -330,5 +330,8 @@ python -m venv .venv
 ```
 
 Conventions: rates and volatilities are decimals per year (5% → `0.05`), `T` is in years, vega is
-per 1.0 of volatility and theta is per year. No dividends, European exercise only — the
-Black-Scholes assumptions the write-up has to discuss.
+per 1.0 of volatility and theta is per year. No dividends anywhere — one of the Black-Scholes
+assumptions the write-up has to discuss. Exercise style: European for Black-Scholes, Monte Carlo
+and the variance-reduced and C++ estimators; the binomial tree prices **both European and
+American** exercise, which is what makes the American early-exercise premium in Phase 2
+measurable.
