@@ -5,8 +5,9 @@ efficiency of Monte Carlo option pricing?**
 
 A computational research project rather than a calculator: price the same European option by
 closed form, by binomial tree and by Monte Carlo, then measure how accuracy and runtime respond
-to the numerical choices. Python (NumPy, SciPy, matplotlib, pytest) for Phases 1–4; C++17 for the
-performance work in Phase 5.
+to the numerical choices, then invert the whole thing against a real exchange's closing prices.
+Python (NumPy, SciPy, matplotlib, pytest) for Phases 1–4 and 6; C++17 for the performance work in
+Phase 5.
 
 ## Status
 
@@ -17,9 +18,10 @@ performance work in Phase 5.
 | 3 | Monte Carlo convergence: error, standard error, runtime, the 1/√N law | **done** |
 | 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | **done** |
 | 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | **done** |
+| 6 | Implied volatility and the Nifty 50 smile, on real NSE data | **done** |
 
-2,950 tests pass across the models, the harness, the variance-reduced estimators and the
-C++ engine.
+4,595 tests pass across the models, the harness, the variance-reduced estimators, the
+C++ engine and the implied-volatility solver.
 
 **Phase 1** — `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
 types: Hull's worked examples, put-call parity, every Greek against a central finite difference,
@@ -36,6 +38,9 @@ measured through the same harness at equal path counts.
 
 **Phase 5** — the four estimators rewritten in C++17 and called through a C ABI, so they run
 through that same harness: fast *and* demonstrably still correct.
+
+**Phase 6** — Black-Scholes inverted for volatility by safeguarded Newton-Raphson, and pointed
+at one day's real NSE option chain: 417 Nifty 50 quotes, and the smile they imply.
 
 ## Phase 2 results
 
@@ -292,6 +297,185 @@ K=160 call). Cost (variance × runtime) at 10^7 paths: **6.68e-7 against NumPy's
 cheaper per unit of accuracy.
 
 
+## Phase 6 results — implied volatility on real NSE data
+
+```
+python analysis/fetch_phase6_data.py 2026-11-16     # downloads from nseindia.com
+python analysis/run_phase6.py && python analysis/plot_phase6.py
+```
+
+Every phase so far measured a model against itself: a volatility went in, a price came out, and
+the error was measured against a formula that was true by assumption. Phase 6 points the same
+machinery at the market and runs it backwards — take the prices the exchange settled at, invert
+Black-Scholes for the volatility each one implies, and see whether the one constant volatility
+the model assumes is there.
+
+### The data, and every assumption behind it
+
+| input | value | where it comes from |
+|---|---|---|
+| Trading day | Monday **16 November 2026** | — |
+| Option prices | `ClsPric`, the exchange close | NSE F&O bhavcopy `BhavCopy_NSE_FO_0_0_0_20261116_F_0000.csv.zip` from `nsearchives.nseindia.com/content/fo/`, NIFTY rows kept in `data/` |
+| Nifty 50 spot close | **25,291.10** | the bhavcopy's own `UndrlygPric`, cross-checked against NSE's `ind_close_all_16112026.csv` (Nifty 50 close 25,291.10 — identical) |
+| Risk-free rate | **5.8255%** continuously compounded | 91-day GoI Treasury bill, RBI auction of **11 November 2026**: cut-off price ₹98.5581, RBI's quoted implicit yield 5.8681%. Converted: `r = ln(100/98.5581)/(91/365)` |
+| Time to expiry | calendar days / 365 | 7, 43 and 70 days |
+| Exercise style | European | Nifty index options are European, so Black-Scholes applies directly — unlike Indian single-stock options, which are American |
+| Dividends | **none modelled** | the Black-Scholes assumption. It turns out to be measurably wrong here — see below |
+
+RBI quotes 5.8681% as a *simple* annualised yield; Black-Scholes discounts with `exp(-r*T)` and
+wants the continuously compounded rate, which reaches the same total return with a slightly
+smaller number. The gap is 4.3 basis points.
+
+**Expiries.** The three monthly ones: 2026-11-23 (7 days), 2026-12-29 (43 days), 2027-01-25 (70
+days). They are identified as *the expiries that also have a futures contract* — NSE lists NIFTY
+options weekly but futures only monthly. The obvious rule, "the last Tuesday of the month", is
+wrong for two of the three: 24 November 2026 is Guru Nanak Jayanti and 26 January 2027 is
+Republic Day, so both expiries move back to the Monday. The data knows; a hard-coded calendar
+would not.
+
+**Only out-of-the-money options.** Puts below spot, calls above. A call and a put at the same
+strike carry the *same* volatility information — put-call parity converts one into the other
+with no volatility input at all — so using both would double-count. The out-of-the-money one is
+the better half of the pair because its entire price is optionality, while an in-the-money
+option's price is mostly intrinsic value, and one tick of rounding on a 5,000-point premium
+moves the implied volatility far more than it moves the price.
+
+### What was dropped
+
+| | 2026-11-23 | 2026-12-29 | 2027-01-25 |
+|---|---|---|---|
+| contracts listed | 316 | 348 | 280 |
+| in the money | −158 | −171 | −140 |
+| zero traded volume | 0 | −4 | −49 |
+| zero open interest | 0 | 0 | 0 |
+| close below 1.00 | −5 | 0 | 0 |
+| no implied volatility | 0 | 0 | 0 |
+| **kept** | **153** | **173** | **91** |
+
+**417 of 944 contracts kept.** The filters run in that order, so each contract is counted once.
+
+* *In the money* is not a quality filter — it is the half of each pair that the convention
+  discards, and it is the bulk of the drop.
+* *Zero volume* means today's close is a stale print or a theoretical value rather than a price
+  anyone transacted at. It costs almost nothing on the near expiries and 35% of the January
+  chain, which is simply how far out the liquidity reaches.
+* *Below 1.00* (twenty ticks of 0.05) removes five deep out-of-the-money weekly puts all quoted
+  at exactly 0.90 — a practical price floor rather than a valuation. At that price one tick is
+  worth about **0.3 of a vol point**, so the implied volatility there is mostly quantisation.
+  `results/iv_smile.csv` carries the per-tick sensitivity of every surviving strike, so where the
+  remaining noise is stays visible instead of being asserted.
+* **Not one surviving quote failed to invert.** No close fell outside the no-arbitrage bounds, so
+  the `nan` path never fired on this day's data. That is a result about the data, not about the
+  solver, and it is worth stating because it is not guaranteed: a stale close on an illiquid
+  deep-in-the-money strike settling below intrinsic value is the normal way it happens.
+
+### The smile
+
+![Implied volatility against moneyness](results/iv_smile.png)
+
+Implied volatility, % annualised, read straight off the curve by linear interpolation between
+strikes — no fitted shape, nothing extrapolated:
+
+| expiry | 0.95 | 1.00 (put side) | 1.00 (call side) | 1.05 | 0.95 − 1.05 |
+|---|---|---|---|---|---|
+| 2026-11-23 (7d) | **19.89** | 15.65 | 13.62 | **17.39** | 2.50 pt |
+| 2026-12-29 (43d) | **15.89** | 13.63 | 13.00 | **12.11** | 3.78 pt |
+| 2027-01-25 (70d) | **15.36** | 13.27 | 13.54 | **12.22** | 3.14 pt |
+
+**Black-Scholes' single volatility is not there.** On the 43-day expiry it would have to be 15.9%
+and 12.1% at the same time, on the same index, for the same 43 days. Across the whole surviving
+range the spread is far larger still: **76.1%** at moneyness 0.47 against **12.1%** at 1.05, a
+factor of six and a half.
+
+**All three are smiles, but the bottom of the smile moves out with maturity.** This is the
+clearest thing in the data and it is not quite the textbook picture:
+
+| expiry | lowest IV on the curve | at moneyness | IV at 1.05 minus the minimum |
+|---|---|---|---|
+| 2026-11-23 (7d) | 13.62 | **1.000** | +3.77 pt |
+| 2026-12-29 (43d) | 12.11 | **1.050** | 0 |
+| 2027-01-25 (70d) | 12.07 | **1.066** | +0.15 pt |
+
+At seven days the curve bottoms out as soon as it crosses the money and the call wing climbs
+3.8 vol points over the next 5% of moneyness — a genuine two-sided smile inside the liquid
+range. At 43 and 70 days the same range is one-sided: the curve is still falling at 1.05 and
+does not turn up until beyond it. So "smile or skew" is not a fixed property of equity index
+options — on this day it depends on which expiry is asked, and the one-week options are the ones
+paying up for a move in *either* direction.
+
+The near-dated call wing is not an artefact of thin quotes: the 26,500 call (moneyness 1.048,
+17.14% implied) traded **137,352 contracts**, and one price tick there is worth 0.02 of a vol
+point.
+
+**The skew is one-sided and it is the puts that are dear.** At 43 days, 0.95 is 2.6 vol points
+above the money and 1.05 is 0.9 points below it. Downside protection costs more per unit of
+volatility than upside participation, at every expiry here.
+
+### Why the two branches of each smile do not meet
+
+![The forward diagnostic](results/iv_forward_diagnostic.png)
+
+Look at the 7-day row above: the put branch arrives at the money at 15.65% and the call branch
+leaves it at 13.62%. A **2.03 vol-point step** across two strikes 50 points apart. Something is
+wrong, and it is not the market.
+
+Put-call parity gives the forward price with no model at all — `F = K + (C − P)·exp(r·T)` follows
+from the payoffs alone. Averaged over the ten most liquid strikes:
+
+| expiry | `S·exp(rT)` | parity forward | NIFTY future | gap | ATM jump | jump, priced off the market's forward |
+|---|---|---|---|---|---|---|
+| 2026-11-23 | 25,319.4 | 25,290.3 | 25,293.6 | **−29.1** | **+2.03 pt** | +0.03 pt |
+| 2026-12-29 | 25,465.3 | 25,447.8 | 25,449.6 | **−17.5** | **+0.64 pt** | +0.13 pt |
+| 2027-01-25 | 25,575.2 | 25,594.2 | 25,605.7 | **+19.0** | **−0.27 pt** | +0.17 pt |
+
+The option market and the futures market agree with each other to within about 3 points, and
+both disagree with `S·exp(rT)`. Pricing against a forward that is 29 points too high makes calls
+look cheap and puts look dear, and that is exactly the step. **Re-inverting the same quotes
+against the forward the market is itself quoting collapses the step from 2.03 vol points to
+0.03** — and the sign follows: January's forward gap is positive, and January is the one expiry
+whose step runs the other way.
+
+This is the *no-dividend* assumption failing, not the constant-volatility one, and it is worth
+separating because it is the cheaper of the two to fix: Black-Scholes only ever uses the spot
+through the forward it implies, so substituting `F·exp(−r·T)` for `S` corrects it with no new
+code. The smiles above are left on the stated inputs, with the correction reported beside them.
+
+### What the inversion cost
+
+| expiry | strikes | mean price evaluations | max | bisection share of moves | median vol points per tick |
+|---|---|---|---|---|---|
+| 2026-11-23 | 153 | 8.75 | 11 | 11.6% | 0.051 |
+| 2026-12-29 | 173 | 8.21 | 11 | 11.1% | 0.005 |
+| 2027-01-25 | 91 | 7.04 | 9 | 8.2% | 0.001 |
+
+About **eight evaluations of the Black-Scholes formula per strike**, never more than eleven.
+Roughly **one move in nine is a bisection** rather than a Newton step, almost all of them in the
+first two or three iterations while the bracket is still wide — so the safeguard is load-bearing
+on real data, not decoration. The last column is the honest error bar: on the 7-day expiry the
+median strike's implied volatility is pinned to about 0.05 of a vol point by the 0.05 price tick,
+which is why the table above is quoted to two decimal places and not five.
+
+### Where the constant-volatility assumption breaks
+
+Black-Scholes assumes the index's volatility is a single number, fixed for the life of the
+option and the same whatever happens to the level. If that were true, every point on the chart
+above would sit on one horizontal line, because every one of those 417 quotes is a claim about
+the volatility of the *same index* over the *same period*. They do not: on the 43-day expiry
+alone the implied volatility runs from 12.1% to 76.1% depending only on which strike is asked,
+and the gap between a 5%-out-of-the-money put and a 5%-out-of-the-money call is 3.8 vol points.
+The model is not broken in the sense of giving wrong prices — it is being used as a translator,
+and the market is using a different exchange rate at every strike. What the shape says is that
+the market does not price returns as the symmetric bell curve the model assumes: it charges extra
+for the left tail — 0.95 trades 2.6 vol points above the money at 43 days while 1.05 trades 0.9
+below it — and on the one-week expiry it charges extra for both tails. Black-Scholes has exactly
+one dial for the whole distribution, so the only way to say "a crash is more likely than a
+lognormal allows" from inside the formula is to feed it a higher volatility at the strikes where
+the crash would land. The smile *is* that correction, made visible, and it is the market's
+statement rather than the model's. The departure is not even constant in time: the 0.95-to-1.05
+spread is 2.50 vol points at seven days and 3.78 at forty-three, and the minimum of the curve
+slides from moneyness 1.00 to 1.07 as maturity lengthens.
+
+
 ## Layout
 
 ```
@@ -302,11 +486,15 @@ src/pricing/monte_carlo.py         GBM simulation with standard error and confid
 src/pricing/variance_reduction.py  antithetic, control variate, both, importance sampling
 src/pricing/cpp_backend.py         loads the C++ engine through a C ABI with ctypes
 cpp/mc_engine.cpp                  the four estimators in C++17, counter-based RNG, threaded
+src/pricing/implied_vol.py         inverts Black-Scholes for sigma: safeguarded Newton-Raphson
 src/experiments/harness.py         measures any estimator: bias, RMSE, coverage, runtime, cost
 tests/                             pytest suite (textbook values, parity, finite differences,
                                    edge cases, CI coverage, calibrated fake estimators)
-analysis/run_phase{2,3,4,5}.py     run the experiments, write results/*.csv
-analysis/plot_phase{2,3,4,5}.py    read the CSVs, print the tables, write results/*.png
+analysis/fetch_phase6_data.py      downloads one day's NSE F&O bhavcopy, keeps the NIFTY rows
+analysis/run_phase{2..6}.py        run the experiments, write results/*.csv
+analysis/plot_phase{2..6}.py       read the CSVs, print the tables, write results/*.png
+data/                              the NSE bhavcopy slice Phase 6 reads (committed, so the
+                                   smile can be reproduced without re-downloading)
 results/                           experiment CSVs and charts (committed, so the write-up can cite them)
 requirements.txt                   numpy, scipy, matplotlib, pytest
 pytest.ini                         puts src/ on the import path
@@ -331,10 +519,15 @@ python -m venv .venv
 
 Conventions: rates and volatilities are decimals per year (5% → `0.05`), `T` is in years, vega is
 per 1.0 of volatility and theta is per year. No dividends anywhere — one of the Black-Scholes
-assumptions the write-up has to discuss. Exercise style: European for Black-Scholes, Monte Carlo
-and the variance-reduced and C++ estimators; the binomial tree prices **both European and
-American** exercise, which is what makes the American early-exercise premium in Phase 2
-measurable.
+assumptions the write-up has to discuss, and Phase 6 measures what it costs on live quotes.
+Exercise style: European for Black-Scholes, Monte Carlo and the variance-reduced and C++
+estimators; the binomial tree prices **both European and American** exercise, which is what makes
+the American early-exercise premium in Phase 2 measurable. Nifty 50 index options are European
+too, which is what lets Phase 6 invert the closed form directly.
+
+Phase 6 reads `data/nifty_fo_bhavcopy_20261116.csv`, which is committed, so the smile reproduces
+without network access. `python analysis/fetch_phase6_data.py <YYYY-MM-DD>` fetches another
+trading day from NSE if wanted.
 
 
 ## Notes
