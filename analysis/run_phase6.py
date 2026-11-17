@@ -41,11 +41,35 @@ convention and there is a concrete reason for it:
   the price. The same information arrives with a much worse signal-to-noise
   ratio.
 
-So: puts for strikes below spot, calls for strikes above.
+So: puts below the money, calls above it -- where "the money" is the
+**forward**, not the spot. See below for why.
+
+Which forward: the market's, not the model's
+--------------------------------------------
+Black-Scholes only ever uses the spot through the forward it implies. With no
+dividends that forward is ``S*exp(r*T)``, and on this data that is
+**measurably not the forward anyone is trading**: put-call parity, which is
+model-free, reads 25,290.3 out of the 7-day quotes where ``S*exp(r*T)`` says
+25,319.4, and the NIFTY future closes at 25,293.6. The options and the futures
+agree with each other and both disagree with the formula, because the index
+pays dividends and the model is told it does not.
+
+Pricing a smile against a forward that is 29 points too high makes every call
+look cheap and every put look dear, and the two branches of the smile then fail
+to meet in the middle by two whole volatility points. So the primary result
+here uses the **parity forward**: ``S`` is replaced by ``F*exp(-r*T)``, which is
+exactly the Black-76 adjustment and needs no new pricing code. Moneyness is
+then ``K/F``, and "out of the money" is measured from ``F`` as well -- splitting
+the chain at the spot while pricing off the forward would put genuinely
+in-the-money calls on the call branch and reintroduce the seam.
+
+Every row keeps the spot-and-T-bill inversion beside it as ``implied_vol_spot``,
+and the comparison is the subject of the second figure. Nothing is hidden: the
+discarded construction is reported, measured, and shown to be the worse one.
 
 Outputs
 -------
-``iv_smile.csv``          every surviving strike, with its implied volatility.
+``iv_smile.csv``          every surviving strike, with both implied volatilities.
 ``iv_filter_log.csv``     how many strikes each filter removed, and why.
 ``iv_term_structure.csv`` one row per expiry: the smile in numbers, the
                           forward diagnostics, and what the solver cost.
@@ -148,7 +172,7 @@ PRICE_FLOOR = 20.0 * TICK
 #: Filters are applied in this order and counted at each stage, so the drop
 #: accounting in ``iv_filter_log.csv`` adds up exactly.
 FILTER_ORDER = [
-    "in_the_money",
+    "in_the_money_vs_forward",
     "zero_volume",
     "zero_open_interest",
     "below_price_floor",
@@ -217,16 +241,22 @@ def build_smile(options: list[dict], expiry: str, spot: float, rate: float,
     also counted as below the price floor, so the counts sum to the number of
     contracts that started.
 
-    Each row carries **two** implied volatilities. ``implied_vol`` is the one
-    the phase is about: Black-Scholes on the stated inputs, spot and the
-    T-bill rate, no dividends. ``implied_vol_fwd`` re-inverts the same quote
-    against ``forward``, the forward the option market is itself quoting via
-    put-call parity -- a diagnostic, kept beside the main number rather than
-    replacing it, so the plots can show what the no-dividend assumption costs.
+    Each row carries **two** implied volatilities. ``implied_vol`` is the
+    primary one: the quote inverted against ``forward``, the forward the
+    option market is itself quoting via put-call parity.
+    ``implied_vol_spot`` is the same quote inverted against the spot and the
+    T-bill rate with no dividends -- the textbook construction, kept beside
+    the main number as a diagnostic so the plots can show what the
+    no-dividend assumption costs.
     """
     expiry_date = date.fromisoformat(expiry)
     days = (expiry_date - TRADE_DATE).days
     years = days / DAYS_PER_YEAR
+
+    # Black-Scholes reaches the forward as ``S*exp(r*T)``, so handing it this
+    # spot makes it price against the market's forward instead of the
+    # dividend-free one. Same formula, same code, one different number in.
+    forward_spot = forward * math.exp(-rate * years)
 
     dropped: Counter = Counter()
     smile = []
@@ -238,10 +268,13 @@ def build_smile(options: list[dict], expiry: str, spot: float, rate: float,
         strike = float(row["StrkPric"])
         kind = "call" if row["OptnTp"] == "CE" else "put"
 
-        # 1. Out of the money only: puts below spot, calls above.
-        out_of_the_money = (strike > spot) if kind == "call" else (strike < spot)
+        # 1. Out of the money only, measured from the **forward**: puts below
+        # it, calls above. Splitting at the spot instead would classify a
+        # call struck between S and F as out of the money when it is not,
+        # putting a mostly-intrinsic quote on the call branch.
+        out_of_the_money = (strike > forward) if kind == "call" else (strike < forward)
         if not out_of_the_money:
-            dropped["in_the_money"] += 1
+            dropped["in_the_money_vs_forward"] += 1
             continue
 
         # 2 and 3. Liquidity. Zero traded volume means the close is a stale
@@ -261,10 +294,11 @@ def build_smile(options: list[dict], expiry: str, spot: float, rate: float,
             dropped["below_price_floor"] += 1
             continue
 
-        # 5. The inversion itself. A nan here is a quote no volatility can
-        # produce -- outside the no-arbitrage bounds -- and it is dropped and
-        # counted by its reason rather than replaced with a guess.
-        result = implied_vol_detail(close, spot, strike, years, rate, kind)
+        # 5. The inversion itself, against the market's forward. A nan here is
+        # a quote no volatility can produce -- outside the no-arbitrage bounds
+        # -- and it is dropped and counted by its reason rather than replaced
+        # with a guess.
+        result = implied_vol_detail(close, forward_spot, strike, years, rate, kind)
         if math.isnan(result.sigma) or result.sigma <= 0.0:
             dropped["no_implied_vol"] += 1
             dropped[f"status:{result.status}"] += 1
@@ -272,14 +306,12 @@ def build_smile(options: list[dict], expiry: str, spot: float, rate: float,
 
         # What one tick of price is worth in volatility points: the resolution
         # of this particular number, and the honest error bar on it.
-        option_vega = vega(spot, strike, rate, result.sigma, years, kind)
+        option_vega = vega(forward_spot, strike, rate, result.sigma, years, kind)
         iv_per_tick = TICK / option_vega if option_vega > 0 else float("nan")
 
-        # The same quote, inverted against the market's own forward. See the
-        # docstring and ``forward_adjusted_jump``.
-        forward_spot = forward * math.exp(-rate * years)
-        forward_result = implied_vol_detail(close, forward_spot, strike, years,
-                                            rate, kind)
+        # The diagnostic: the same quote on the textbook inputs -- spot, the
+        # T-bill rate, no dividends. Reported, not used.
+        spot_result = implied_vol_detail(close, spot, strike, years, rate, kind)
 
         smile.append({
             "expiry": expiry,
@@ -287,14 +319,14 @@ def build_smile(options: list[dict], expiry: str, spot: float, rate: float,
             "years_to_expiry": f"{years:.8f}",
             "kind": kind,
             "strike": f"{strike:.2f}",
-            "moneyness": f"{strike / spot:.6f}",
             "forward_moneyness": f"{strike / forward:.6f}",
+            "spot_moneyness": f"{strike / spot:.6f}",
             "close": f"{close:.2f}",
             "settlement": row["SttlmPric"],
             "volume": row["TtlTradgVol"],
             "open_interest": row["OpnIntrst"],
             "implied_vol": f"{result.sigma:.8f}",
-            "implied_vol_fwd": f"{forward_result.sigma:.8f}",
+            "implied_vol_spot": f"{spot_result.sigma:.8f}",
             "vega": f"{option_vega:.6f}",
             "iv_per_tick": f"{iv_per_tick:.8f}",
             "solver_status": result.status,
@@ -311,7 +343,9 @@ def build_smile(options: list[dict], expiry: str, spot: float, rate: float,
 # Reading the smile off in numbers
 # ---------------------------------------------------------------------------
 
-def interpolate(smile: list[dict], target: float, kind: str) -> float:
+def interpolate(smile: list[dict], target: float, kind: str,
+                moneyness_column: str = "forward_moneyness",
+                vol_column: str = "implied_vol") -> float:
     """Implied volatility at a given moneyness, linearly between strikes.
 
     One side of the smile at a time, because the two sides are different
@@ -319,8 +353,11 @@ def interpolate(smile: list[dict], target: float, kind: str) -> float:
     interpolation is used rather than a fitted curve so the reported numbers
     stay a direct reading of the data -- no shape is assumed, and nothing is
     extrapolated beyond the strikes that exist.
+
+    The column arguments let the same reading be taken off the spot-based
+    diagnostic, so the two constructions are compared by identical code.
     """
-    points = sorted((float(r["moneyness"]), float(r["implied_vol"]))
+    points = sorted((float(r[moneyness_column]), float(r[vol_column]))
                     for r in smile if r["kind"] == kind)
     if len(points) < 2:
         return float("nan")
@@ -336,19 +373,24 @@ def interpolate(smile: list[dict], target: float, kind: str) -> float:
     return float("nan")
 
 
-def at_the_money_edges(smile: list[dict]) -> tuple[float, float]:
-    """The two one-sided limits of the smile at moneyness 1.0.
+def at_the_money_edges(smile: list[dict],
+                       vol_column: str = "implied_vol") -> tuple[float, float]:
+    """The two one-sided limits of the smile at the money.
 
     The highest-strike put and the lowest-strike call: the last point of the
-    put branch and the first point of the call branch. They are the closest
-    thing the data has to "the at-the-money volatility", and reporting both
-    rather than averaging them is the point -- the gap between them is a
-    measurement, and the forward diagnostic below explains it.
+    put branch and the first point of the call branch, which straddle the
+    forward. They are the closest thing the data has to "the at-the-money
+    volatility", and reporting both rather than averaging them is the point --
+    the gap between them is a measurement.
+
+    Taking the same two *contracts* under either inversion is what makes the
+    comparison fair: the spot-based diagnostic is not allowed a different
+    pair of strikes.
     """
     puts = [r for r in smile if r["kind"] == "put"]
     calls = [r for r in smile if r["kind"] == "call"]
-    put_side = float(puts[-1]["implied_vol"]) if puts else float("nan")
-    call_side = float(calls[0]["implied_vol"]) if calls else float("nan")
+    put_side = float(puts[-1][vol_column]) if puts else float("nan")
+    call_side = float(calls[0][vol_column]) if calls else float("nan")
     return put_side, call_side
 
 
@@ -366,7 +408,12 @@ def parity_forward(options: list[dict], expiry: str, spot: float, rate: float,
     nearest the money keeps the reading on the most liquid pairs, where the
     closes are least stale.
 
-    This is the diagnostic that explains the step in the middle of the smile.
+    This is the number the whole primary result is built on, so it is worth
+    being clear about how little it assumes: no distribution, no volatility,
+    no model. Only that a call minus a put at the same strike has the same
+    payoff as a forward contract, which is true by inspection of the payoffs.
+
+    It is also what explains the step in the middle of the spot-based smile.
     Black-Scholes with no dividends assumes the forward is ``S*exp(r*T)``; if
     the market is trading a different forward, then the strike that is
     genuinely at the money is not the one at ``K = S*exp(r*T)``, and the put
@@ -391,36 +438,6 @@ def parity_forward(options: list[dict], expiry: str, spot: float, rate: float,
         put = float(legs["PE"]["ClsPric"])
         forwards.append(strike + (call - put) * math.exp(rate * years))
     return sum(forwards) / len(forwards)
-
-
-def forward_adjusted_jump(smile: list[dict], spot: float, rate: float,
-                          years: float, forward: float) -> float:
-    """Re-invert the two at-the-money quotes against the market's forward.
-
-    Black-Scholes only ever uses the spot through the forward it implies, so
-    replacing ``S`` by ``F*exp(-r*T)`` prices against the forward the market is
-    actually trading instead of the dividend-free one the model assumes. It is
-    exactly the Black-76 adjustment, and it needs no new code -- just a
-    different number in the existing ``S`` slot.
-
-    If the step in the middle of the smile is caused by the forward, this
-    closes it. If it is something else, it will not, and that is worth
-    knowing. Reported as a diagnostic only: the smile itself stays on the
-    stated inputs.
-    """
-    puts = [r for r in smile if r["kind"] == "put"]
-    calls = [r for r in smile if r["kind"] == "call"]
-    if not puts or not calls or math.isnan(forward):
-        return float("nan")
-
-    effective_spot = forward * math.exp(-rate * years)
-    edges = []
-    for row in (puts[-1], calls[0]):
-        result = implied_vol_detail(float(row["close"]), effective_spot,
-                                    float(row["strike"]), years, rate,
-                                    row["kind"])
-        edges.append(result.sigma)
-    return edges[0] - edges[1]
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +491,9 @@ def main() -> int:
         started = sum(1 for r in options if r["XpryDt"] == expiry)
 
         print(f"\n{expiry}  ({days} days, T = {years:.6f})")
+        print(f"  parity forward            {market_forward:,.2f}  "
+              f"(S*exp(rT) = {spot * math.exp(RISK_FREE_RATE * years):,.2f}, "
+              f"future = {futures[expiry]:,.2f})")
         print(f"  contracts listed          {started}")
         for reason in FILTER_ORDER:
             print(f"  dropped: {reason:<22} {dropped[reason]}")
@@ -495,11 +515,21 @@ def main() -> int:
         if not smile:
             continue
 
+        # The primary reading, on the market's forward...
         put_side, call_side = at_the_money_edges(smile)
-        spot_forward = spot * math.exp(RISK_FREE_RATE * years)
         iv_095 = interpolate(smile, 0.95, "put")
         iv_105 = interpolate(smile, 1.05, "call")
 
+        # ...and the same reading on the spot-and-T-bill diagnostic, taken by
+        # the same code off the same contracts.
+        spot_put_side, spot_call_side = at_the_money_edges(smile,
+                                                           "implied_vol_spot")
+        spot_iv_095 = interpolate(smile, 0.95, "put", "spot_moneyness",
+                                  "implied_vol_spot")
+        spot_iv_105 = interpolate(smile, 1.05, "call", "spot_moneyness",
+                                  "implied_vol_spot")
+
+        spot_forward = spot * math.exp(RISK_FREE_RATE * years)
         iterations = [int(r["iterations"]) for r in smile]
         bisections = sum(int(r["bisection_steps"]) for r in smile)
         newtons = sum(int(r["newton_steps"]) for r in smile)
@@ -510,8 +540,8 @@ def main() -> int:
             "days_to_expiry": days,
             "years_to_expiry": f"{years:.8f}",
             "strikes_kept": len(smile),
-            "moneyness_min": min(float(r["moneyness"]) for r in smile),
-            "moneyness_max": max(float(r["moneyness"]) for r in smile),
+            "moneyness_min": f"{min(float(r['forward_moneyness']) for r in smile):.6f}",
+            "moneyness_max": f"{max(float(r['forward_moneyness']) for r in smile):.6f}",
             "iv_at_0_95": f"{iv_095:.6f}",
             "iv_atm_put_side": f"{put_side:.6f}",
             "iv_atm_call_side": f"{call_side:.6f}",
@@ -519,11 +549,16 @@ def main() -> int:
             "iv_at_1_05": f"{iv_105:.6f}",
             "skew_095_minus_105": f"{iv_095 - iv_105:.6f}",
             "atm_jump_put_minus_call": f"{put_side - call_side:.6f}",
-            "spot_forward": f"{spot_forward:.4f}",
+            "spot_iv_at_0_95": f"{spot_iv_095:.6f}",
+            "spot_iv_atm_put_side": f"{spot_put_side:.6f}",
+            "spot_iv_atm_call_side": f"{spot_call_side:.6f}",
+            "spot_iv_at_1_05": f"{spot_iv_105:.6f}",
+            "spot_skew_095_minus_105": f"{spot_iv_095 - spot_iv_105:.6f}",
+            "spot_atm_jump_put_minus_call": f"{spot_put_side - spot_call_side:.6f}",
             "parity_forward": f"{market_forward:.4f}",
+            "spot_forward": f"{spot_forward:.4f}",
             "futures_close": f"{futures[expiry]:.4f}",
             "forward_gap_points": f"{market_forward - spot_forward:.4f}",
-            "atm_jump_forward_adjusted": f"{forward_adjusted_jump(smile, spot, RISK_FREE_RATE, years, market_forward):.6f}",
             "mean_iterations": f"{sum(iterations) / len(iterations):.3f}",
             "max_iterations": max(iterations),
             "newton_steps": newtons,

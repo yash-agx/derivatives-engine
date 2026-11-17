@@ -318,9 +318,10 @@ the model assumes is there.
 | Option prices | `ClsPric`, the exchange close | NSE F&O bhavcopy `BhavCopy_NSE_FO_0_0_0_20261116_F_0000.csv.zip` from `nsearchives.nseindia.com/content/fo/`, NIFTY rows kept in `data/` |
 | Nifty 50 spot close | **25,291.10** | the bhavcopy's own `UndrlygPric`, cross-checked against NSE's `ind_close_all_16112026.csv` (Nifty 50 close 25,291.10 — identical) |
 | Risk-free rate | **5.8255%** continuously compounded | 91-day GoI Treasury bill, RBI auction of **11 November 2026**: cut-off price ₹98.5581, RBI's quoted implicit yield 5.8681%. Converted: `r = ln(100/98.5581)/(91/365)` |
+| Forward | **put-call parity**, averaged over the ten most liquid strikes | the same option quotes: `F = K + (C − P)·exp(r·T)`. 25,290.3 / 25,447.8 / 25,594.2 for the three expiries |
 | Time to expiry | calendar days / 365 | 7, 43 and 70 days |
 | Exercise style | European | Nifty index options are European, so Black-Scholes applies directly — unlike Indian single-stock options, which are American |
-| Dividends | **none modelled** | the Black-Scholes assumption. It turns out to be measurably wrong here — see below |
+| Dividends | **not assumed away** | the forward above is the market's, so whatever carry and dividends it embeds is already in it. The textbook no-dividend version is kept beside it as a diagnostic |
 
 RBI quotes 5.8681% as a *simple* annualised yield; Black-Scholes discounts with `exp(-r*T)` and
 wants the continuously compounded rate, which reaches the same total return with a slightly
@@ -333,19 +334,28 @@ wrong for two of the three: 24 November 2026 is Guru Nanak Jayanti and 26 Januar
 Republic Day, so both expiries move back to the Monday. The data knows; a hard-coded calendar
 would not.
 
-**Only out-of-the-money options.** Puts below spot, calls above. A call and a put at the same
-strike carry the *same* volatility information — put-call parity converts one into the other
-with no volatility input at all — so using both would double-count. The out-of-the-money one is
-the better half of the pair because its entire price is optionality, while an in-the-money
-option's price is mostly intrinsic value, and one tick of rounding on a 5,000-point premium
-moves the implied volatility far more than it moves the price.
+**Only out-of-the-money options.** Puts below the money, calls above it. A call and a put at the
+same strike carry the *same* volatility information — put-call parity converts one into the
+other with no volatility input at all — so using both would double-count. The out-of-the-money
+one is the better half of the pair because its entire price is optionality, while an
+in-the-money option's price is mostly intrinsic value, and one tick of rounding on a 5,000-point
+premium moves the implied volatility far more than it moves the price.
+
+**Which forward, and why it is the market's.** Black-Scholes only ever uses the spot through the
+forward it implies, and with no dividends that forward is `S·exp(r·T)`. On this data that is
+measurably not the forward anyone is trading, so the primary result replaces `S` with
+`F·exp(−r·T)` — the Black-76 adjustment, which needs no new pricing code — and measures moneyness
+as `K/F`. "Out of the money" is measured from `F` as well: splitting the chain at the spot while
+pricing off the forward would put genuinely in-the-money calls on the call branch. The
+spot-and-T-bill construction is kept on every row as `implied_vol_spot` and is the subject of the
+second figure; nothing is discarded, the weaker construction is reported and measured.
 
 ### What was dropped
 
 | | 2026-11-23 | 2026-12-29 | 2027-01-25 |
 |---|---|---|---|
 | contracts listed | 316 | 348 | 280 |
-| in the money | −158 | −171 | −140 |
+| in the money (vs the forward) | −158 | −171 | −140 |
 | zero traded volume | 0 | −4 | −49 |
 | zero open interest | 0 | 0 | 0 |
 | close below 1.00 | −5 | 0 | 0 |
@@ -355,7 +365,10 @@ moves the implied volatility far more than it moves the price.
 **417 of 944 contracts kept.** The filters run in that order, so each contract is counted once.
 
 * *In the money* is not a quality filter — it is the half of each pair that the convention
-  discards, and it is the bulk of the drop.
+  discards, and it is the bulk of the drop. Moving the split from the spot to the forward does
+  not change the count (each strike still contributes exactly one contract), only which half of
+  the pair survives: on the December expiry the 25,300–25,400 strikes switch from being read as
+  calls to being read as puts.
 * *Zero volume* means today's close is a stale print or a theoretical value rather than a price
   anyone transacted at. It costs almost nothing on the near expiries and 35% of the January
   chain, which is simply how far out the liquidity reaches.
@@ -371,109 +384,121 @@ moves the implied volatility far more than it moves the price.
 
 ### The smile
 
-![Implied volatility against moneyness](results/iv_smile.png)
+![Implied volatility against forward moneyness](results/iv_smile.png)
 
-Implied volatility, % annualised, read straight off the curve by linear interpolation between
-strikes — no fitted shape, nothing extrapolated:
+Implied volatility, % annualised, against forward moneyness `K/F`, read straight off the curve by
+linear interpolation between strikes — no fitted shape, nothing extrapolated:
 
-| expiry | 0.95 | 1.00 (put side) | 1.00 (call side) | 1.05 | 0.95 − 1.05 |
-|---|---|---|---|---|---|
-| 2026-11-23 (7d) | **19.89** | 15.65 | 13.62 | **17.39** | 2.50 pt |
-| 2026-12-29 (43d) | **15.89** | 13.63 | 13.00 | **12.11** | 3.78 pt |
-| 2027-01-25 (70d) | **15.36** | 13.27 | 13.54 | **12.22** | 3.14 pt |
+| expiry | 0.95 | 1.00 (put side) | 1.00 (call side) | 1.05 | 0.95 − 1.05 | ATM gap |
+|---|---|---|---|---|---|---|
+| 2026-11-23 (7d) | **19.54** | 14.70 | 14.67 | **17.74** | 1.80 pt | +0.03 pt |
+| 2026-12-29 (43d) | **15.29** | 13.23 | 13.10 | **12.45** | 2.84 pt | +0.13 pt |
+| 2027-01-25 (70d) | **14.71** | 13.31 | 13.24 | **12.10** | 2.61 pt | +0.07 pt |
 
-**Black-Scholes' single volatility is not there.** On the 43-day expiry it would have to be 15.9%
-and 12.1% at the same time, on the same index, for the same 43 days. Across the whole surviving
-range the spread is far larger still: **76.1%** at moneyness 0.47 against **12.1%** at 1.05, a
-factor of six and a half.
+**Black-Scholes' single volatility is not there.** On the 43-day expiry it would have to be 15.3%
+and 12.5% at the same time, on the same index, for the same 43 days. Across the whole surviving
+range the spread is far larger still: **76.0%** at `K/F` 0.47 against **12.2%** at 1.04, a factor
+of six and a quarter.
 
-**All three are smiles, but the bottom of the smile moves out with maturity.** This is the
-clearest thing in the data and it is not quite the textbook picture:
+**The two branches now meet.** The last put and the first call straddle the forward and agree to
+**0.03, 0.13 and 0.07 of a vol point** on the three expiries. That is not something the method
+enforces — the two numbers come from different contracts, a put and a call, inverted
+independently — so it is a check that the construction is sound, and the next section is what it
+looked like before.
 
-| expiry | lowest IV on the curve | at moneyness | IV at 1.05 minus the minimum |
+**All three are smiles, but the bottom of the smile moves out with maturity:**
+
+| expiry | lowest IV on the curve | at `K/F` | IV at 1.05 minus the minimum |
 |---|---|---|---|
-| 2026-11-23 (7d) | 13.62 | **1.000** | +3.77 pt |
-| 2026-12-29 (43d) | 12.11 | **1.050** | 0 |
-| 2027-01-25 (70d) | 12.07 | **1.066** | +0.15 pt |
+| 2026-11-23 (7d) | 14.52 | **1.010** | +3.22 pt |
+| 2026-12-29 (43d) | 12.24 | **1.043** | +0.21 pt |
+| 2027-01-25 (70d) | 11.95 | **1.053** | +0.15 pt |
 
-At seven days the curve bottoms out as soon as it crosses the money and the call wing climbs
-3.8 vol points over the next 5% of moneyness — a genuine two-sided smile inside the liquid
-range. At 43 and 70 days the same range is one-sided: the curve is still falling at 1.05 and
-does not turn up until beyond it. So "smile or skew" is not a fixed property of equity index
-options — on this day it depends on which expiry is asked, and the one-week options are the ones
-paying up for a move in *either* direction.
+At seven days the curve bottoms out just past the forward and the call wing climbs 3.2 vol points
+over the next 4% of moneyness — a genuine two-sided smile inside the liquid range. At 43 and 70
+days the same range is one-sided: the curve is still falling at 1.04 and barely turns up by 1.05.
+So "smile or skew" is not a fixed property of equity index options — on this day it depends on
+which expiry is asked, and the one-week options are the ones paying up for a move in *either*
+direction.
 
-The near-dated call wing is not an artefact of thin quotes: the 26,500 call (moneyness 1.048,
-17.14% implied) traded **137,352 contracts**, and one price tick there is worth 0.02 of a vol
-point.
+The near-dated call wing is not an artefact of thin quotes: the 26,500 call (`K/F` 1.048, 17.5%
+implied) traded **137,352 contracts**, and one price tick there is worth 0.02 of a vol point.
 
-**The skew is one-sided and it is the puts that are dear.** At 43 days, 0.95 is 2.6 vol points
-above the money and 1.05 is 0.9 points below it. Downside protection costs more per unit of
-volatility than upside participation, at every expiry here.
+**The skew is one-sided and it is the puts that are dear.** At 43 days, 0.95 trades 2.1 vol points
+above the at-the-money level and 1.05 trades 0.7 below it. Downside protection costs more per
+unit of volatility than upside participation, at every expiry here.
 
-### Why the two branches of each smile do not meet
+### What the textbook construction would have cost
 
 ![The forward diagnostic](results/iv_forward_diagnostic.png)
 
-Look at the 7-day row above: the put branch arrives at the money at 15.65% and the call branch
-leaves it at 13.62%. A **2.03 vol-point step** across two strikes 50 points apart. Something is
-wrong, and it is not the market.
+Price the same quotes against `S·exp(r·T)` with no dividends — the construction every textbook
+starts from — and the put branch and the call branch stop meeting:
 
-Put-call parity gives the forward price with no model at all — `F = K + (C − P)·exp(r·T)` follows
-from the payoffs alone. Averaged over the ten most liquid strikes:
-
-| expiry | `S·exp(rT)` | parity forward | NIFTY future | gap | ATM jump | jump, priced off the market's forward |
+| expiry | parity `F` | NIFTY future | `S·exp(rT)` | gap | ATM step on `F` | ATM step on `S` |
 |---|---|---|---|---|---|---|
-| 2026-11-23 | 25,319.4 | 25,290.3 | 25,293.6 | **−29.1** | **+2.03 pt** | +0.03 pt |
-| 2026-12-29 | 25,465.3 | 25,447.8 | 25,449.6 | **−17.5** | **+0.64 pt** | +0.13 pt |
-| 2027-01-25 | 25,575.2 | 25,594.2 | 25,605.7 | **+19.0** | **−0.27 pt** | +0.17 pt |
+| 2026-11-23 | 25,290.3 | 25,293.6 | 25,319.4 | **−29.1** | +0.03 pt | **+2.03 pt** |
+| 2026-12-29 | 25,447.8 | 25,449.6 | 25,465.3 | **−17.5** | +0.13 pt | **+0.62 pt** |
+| 2027-01-25 | 25,594.2 | 25,605.7 | 25,575.2 | **+19.0** | +0.07 pt | **−0.35 pt** |
 
 The option market and the futures market agree with each other to within about 3 points, and
 both disagree with `S·exp(rT)`. Pricing against a forward that is 29 points too high makes calls
-look cheap and puts look dear, and that is exactly the step. **Re-inverting the same quotes
-against the forward the market is itself quoting collapses the step from 2.03 vol points to
-0.03** — and the sign follows: January's forward gap is positive, and January is the one expiry
-whose step runs the other way.
+look cheap and puts look dear, and on the seven-day expiry that is a **2.03 vol-point step**
+across two strikes 50 points apart. The sign follows: January's forward gap is positive, and
+January is the one expiry whose step runs the other way.
 
-This is the *no-dividend* assumption failing, not the constant-volatility one, and it is worth
-separating because it is the cheaper of the two to fix: Black-Scholes only ever uses the spot
-through the forward it implies, so substituting `F·exp(−r·T)` for `S` corrects it with no new
-code. The smiles above are left on the stated inputs, with the correction reported beside them.
+What it does to the headline numbers (0.95 / at the money / 1.05):
+
+| expiry | on the market's forward | on spot, no dividends |
+|---|---|---|
+| 2026-11-23 | 19.54 / 14.69 / 17.74 | 19.89 / 14.64 / 17.39 |
+| 2026-12-29 | 15.29 / 13.17 / 12.45 | 15.89 / 13.16 / 12.11 |
+| 2027-01-25 | 14.71 / 13.27 / 12.10 | 15.36 / 13.28 / 12.22 |
+
+The at-the-money level barely moves — it is an average of the two branches, and the error is
+antisymmetric — but the **wings move by up to 0.65 of a vol point in opposite directions**, which
+inflates the measured skew by about a third. So this is a correction to the *shape*, which is the
+thing Phase 6 is measuring.
+
+This is the *no-dividend* assumption failing, not the constant-volatility one, and separating the
+two is the point: the forward error is cheap to fix and has been fixed, and what is left over is
+the genuine smile.
 
 ### What the inversion cost
 
 | expiry | strikes | mean price evaluations | max | bisection share of moves | median vol points per tick |
 |---|---|---|---|---|---|
-| 2026-11-23 | 153 | 8.75 | 11 | 11.6% | 0.051 |
-| 2026-12-29 | 173 | 8.21 | 11 | 11.1% | 0.005 |
-| 2027-01-25 | 91 | 7.04 | 9 | 8.2% | 0.001 |
+| 2026-11-23 | 153 | 8.76 | 11 | 11.5% | 0.051 |
+| 2026-12-29 | 173 | 8.20 | 11 | 11.1% | 0.005 |
+| 2027-01-25 | 91 | 7.07 | 9 | 8.3% | 0.002 |
 
 About **eight evaluations of the Black-Scholes formula per strike**, never more than eleven.
 Roughly **one move in nine is a bisection** rather than a Newton step, almost all of them in the
 first two or three iterations while the bracket is still wide — so the safeguard is load-bearing
 on real data, not decoration. The last column is the honest error bar: on the 7-day expiry the
 median strike's implied volatility is pinned to about 0.05 of a vol point by the 0.05 price tick,
-which is why the table above is quoted to two decimal places and not five.
+which is why the tables above are quoted to two decimal places and not five.
 
 ### Where the constant-volatility assumption breaks
 
-Black-Scholes assumes the index's volatility is a single number, fixed for the life of the
-option and the same whatever happens to the level. If that were true, every point on the chart
-above would sit on one horizontal line, because every one of those 417 quotes is a claim about
-the volatility of the *same index* over the *same period*. They do not: on the 43-day expiry
-alone the implied volatility runs from 12.1% to 76.1% depending only on which strike is asked,
-and the gap between a 5%-out-of-the-money put and a 5%-out-of-the-money call is 3.8 vol points.
-The model is not broken in the sense of giving wrong prices — it is being used as a translator,
-and the market is using a different exchange rate at every strike. What the shape says is that
-the market does not price returns as the symmetric bell curve the model assumes: it charges extra
-for the left tail — 0.95 trades 2.6 vol points above the money at 43 days while 1.05 trades 0.9
-below it — and on the one-week expiry it charges extra for both tails. Black-Scholes has exactly
-one dial for the whole distribution, so the only way to say "a crash is more likely than a
-lognormal allows" from inside the formula is to feed it a higher volatility at the strikes where
-the crash would land. The smile *is* that correction, made visible, and it is the market's
-statement rather than the model's. The departure is not even constant in time: the 0.95-to-1.05
-spread is 2.50 vol points at seven days and 3.78 at forty-three, and the minimum of the curve
-slides from moneyness 1.00 to 1.07 as maturity lengthens.
+Black-Scholes assumes the index's volatility is a single number, fixed for the life of the option
+and the same whatever happens to the level. If that were true, every point on the chart above
+would sit on one horizontal line, because every one of those 417 quotes is a claim about the
+volatility of the *same index* over the *same period*. They do not: on the 43-day expiry alone
+the implied volatility runs from 12.2% to 76.0% depending only on which strike is asked, and the
+gap between a 5%-out-of-the-money put and a 5%-out-of-the-money call is 2.8 vol points. None of
+that is a forward or dividend artefact — those have been corrected out, and correcting them
+*reduced* the measured skew by about a third rather than explaining it away. The model is not
+broken in the sense of giving wrong prices; it is being used as a translator, and the market is
+using a different exchange rate at every strike. What the shape says is that the market does not
+price returns as the symmetric bell curve the model assumes: it charges extra for the left tail,
+which is the skew, and on the one-week expiry it charges extra for both tails, which is the
+smile. Black-Scholes has exactly one dial for the whole distribution, so the only way to say "a
+crash is more likely than a lognormal allows" from inside the formula is to feed it a higher
+volatility at the strikes where the crash would land. The smile *is* that correction, made
+visible, and it is the market's statement rather than the model's. The departure is not even
+constant in time: the 0.95-to-1.05 spread is 1.80 vol points at seven days and 2.84 at
+forty-three, and the minimum of the curve slides from `K/F` 1.01 to 1.05 as maturity lengthens.
 
 
 ## Layout
@@ -519,7 +544,9 @@ python -m venv .venv
 
 Conventions: rates and volatilities are decimals per year (5% → `0.05`), `T` is in years, vega is
 per 1.0 of volatility and theta is per year. No dividends anywhere — one of the Black-Scholes
-assumptions the write-up has to discuss, and Phase 6 measures what it costs on live quotes.
+assumptions the write-up has to discuss. Phases 1–5 take it as given; Phase 6 measures what it
+costs on live quotes and then prices against the market's own forward instead, which absorbs
+whatever dividends and carry that forward embeds.
 Exercise style: European for Black-Scholes, Monte Carlo and the variance-reduced and C++
 estimators; the binomial tree prices **both European and American** exercise, which is what makes
 the American early-exercise premium in Phase 2 measurable. Nifty 50 index options are European

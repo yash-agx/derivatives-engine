@@ -7,14 +7,14 @@ saved and can be redrawn without re-running the inversion.
 
 Two figures:
 
-``iv_smile.png``             implied volatility against moneyness, one line
-                             per expiry: the whole surviving strike range, and
-                             a zoom on the liquid core where the headline
-                             numbers are read off.
-``iv_forward_diagnostic.png`` why the two branches of each smile do not meet,
-                             and what happens when the same quotes are
-                             inverted against the forward the market is
-                             actually trading.
+``iv_smile.png``             implied volatility against forward moneyness
+                             ``K/F``, one line per expiry: the whole surviving
+                             strike range, and a zoom on the liquid core where
+                             the headline numbers are read off.
+``iv_forward_diagnostic.png`` what the textbook construction costs: the same
+                             quotes inverted against spot and the T-bill rate
+                             with no dividends, which tears a step into the
+                             middle of every smile.
 """
 
 import csv
@@ -99,7 +99,7 @@ def by_expiry(rows: list[dict]) -> dict[str, list[dict]]:
     for row in rows:
         grouped[row["expiry"]].append(row)
     for group in grouped.values():
-        group.sort(key=lambda r: num(r["moneyness"]))
+        group.sort(key=lambda r: num(r["forward_moneyness"]))
     return dict(grouped)
 
 
@@ -111,12 +111,16 @@ def print_inputs(summary: list[dict]) -> None:
     print("\n\nPHASE 6 -- IMPLIED VOLATILITY, NIFTY 50 OPTIONS, 16 NOV 2026")
     print("Spot 25,291.10. r = 5.8255% continuously compounded (91-day T-bill,")
     print("cut-off price 98.5581, RBI auction 11 Nov 2026). T = calendar days / 365.")
-    print("Out-of-the-money options only: puts below spot, calls above.\n")
-    print(f"{'expiry':>12} {'days':>5} {'strikes':>8} {'moneyness range':>18}")
+    print("Priced against the forward put-call parity reads out of the quotes")
+    print("themselves, so moneyness is K/F. Out-of-the-money only: puts below")
+    print("the forward, calls above.\n")
+    print(f"{'expiry':>12} {'days':>5} {'strikes':>8} {'forward':>11} "
+          f"{'K/F range':>18}")
     for row in summary:
         span = f"{num(row['moneyness_min']):.3f} - {num(row['moneyness_max']):.3f}"
         print(f"{row['expiry']:>12} {row['days_to_expiry']:>5} "
-              f"{row['strikes_kept']:>8} {span:>18}")
+              f"{row['strikes_kept']:>8} {num(row['parity_forward']):>11,.1f} "
+              f"{span:>18}")
 
 
 def print_filters(filters: list[dict]) -> None:
@@ -132,48 +136,63 @@ def print_filters(filters: list[dict]) -> None:
             expiries.append(row["expiry"])
 
     table = {(r["expiry"], r["filter"]): r for r in filters}
-    print(f"{'filter':>20} " + " ".join(f"{e:>12}" for e in expiries))
+    print(f"{'filter':>24} " + " ".join(f"{e:>12}" for e in expiries))
     listed = [table[(e, stages[0])]["contracts_listed"] for e in expiries]
-    print(f"{'contracts listed':>20} " + " ".join(f"{n:>12}" for n in listed))
+    print(f"{'contracts listed':>24} " + " ".join(f"{n:>12}" for n in listed))
     for stage in stages:
         cells = [table[(e, stage)]["dropped"] for e in expiries]
-        print(f"{stage:>20} " + " ".join(f"{-int(n) if int(n) else 0:>12}"
+        print(f"{stage:>24} " + " ".join(f"{-int(n) if int(n) else 0:>12}"
                                          for n in cells))
     kept = [table[(e, stages[-1])]["kept_after"] for e in expiries]
-    print(f"{'kept':>20} " + " ".join(f"{n:>12}" for n in kept))
+    print(f"{'kept':>24} " + " ".join(f"{n:>12}" for n in kept))
 
 
 def print_smile_numbers(summary: list[dict]) -> None:
     print("\n\nTHE SMILE IN NUMBERS (implied volatility, % annualised)")
-    print("At moneyness 1.00 the data has two values, not one: the last put")
-    print("below spot and the first call above it. Both are shown.\n")
+    print("Forward moneyness K/F. At 1.00 the data has two values, not one:")
+    print("the last put below the forward and the first call above it, so the")
+    print("gap between them is a measurement rather than a choice.\n")
     print(f"{'expiry':>12} {'0.95':>8} {'1.00 put':>10} {'1.00 call':>10} "
-          f"{'1.05':>8} {'0.95-1.05':>11}")
+          f"{'1.05':>8} {'0.95-1.05':>11} {'ATM gap':>10}")
     for row in summary:
         print(f"{row['expiry']:>12} "
               f"{num(row['iv_at_0_95']) * 100:>8.2f} "
               f"{num(row['iv_atm_put_side']) * 100:>10.2f} "
               f"{num(row['iv_atm_call_side']) * 100:>10.2f} "
               f"{num(row['iv_at_1_05']) * 100:>8.2f} "
-              f"{num(row['skew_095_minus_105']) * 100:>10.2f}pt")
+              f"{num(row['skew_095_minus_105']) * 100:>10.2f}pt "
+              f"{num(row['atm_jump_put_minus_call']) * 100:>+9.2f}pt")
 
 
 def print_forward_diagnostic(summary: list[dict]) -> None:
-    print("\n\nWHY THE TWO BRANCHES DO NOT MEET")
+    print("\n\nWHAT THE TEXTBOOK CONSTRUCTION WOULD HAVE COST")
     print("Black-Scholes with no dividends assumes the forward is S*exp(r*T).")
     print("Put-call parity says what forward the option market is quoting, and")
     print("the NIFTY future says it independently. Where they differ, the")
-    print("at-the-money strike is not where the model thinks it is.\n")
-    print(f"{'expiry':>12} {'S*exp(rT)':>11} {'parity F':>11} {'future':>11} "
-          f"{'gap':>8} {'ATM jump':>10} {'adjusted':>10}")
+    print("at-the-money strike is not where the model thinks it is, and the")
+    print("two branches of the smile stop meeting.\n")
+    print(f"{'expiry':>12} {'parity F':>11} {'future':>11} {'S*exp(rT)':>11} "
+          f"{'gap':>8} {'ATM gap':>10} {'on spot':>10}")
     for row in summary:
         print(f"{row['expiry']:>12} "
-              f"{num(row['spot_forward']):>11.1f} "
               f"{num(row['parity_forward']):>11.1f} "
               f"{num(row['futures_close']):>11.1f} "
+              f"{num(row['spot_forward']):>11.1f} "
               f"{num(row['forward_gap_points']):>+8.1f} "
               f"{num(row['atm_jump_put_minus_call']) * 100:>+9.2f}pt "
-              f"{num(row['atm_jump_forward_adjusted']) * 100:>+9.2f}pt")
+              f"{num(row['spot_atm_jump_put_minus_call']) * 100:>+9.2f}pt")
+
+    print("\nThe same smile read off both ways (0.95 / ATM / 1.05, vol points):\n")
+    print(f"{'expiry':>12} {'forward basis':>28} {'spot basis':>28}")
+    for row in summary:
+        forward = (f"{num(row['iv_at_0_95']) * 100:.2f} / "
+                   f"{num(row['iv_atm_midpoint']) * 100:.2f} / "
+                   f"{num(row['iv_at_1_05']) * 100:.2f}")
+        spot = (f"{num(row['spot_iv_at_0_95']) * 100:.2f} / "
+                f"{0.5 * (num(row['spot_iv_atm_put_side'])
+                          + num(row['spot_iv_atm_call_side'])) * 100:.2f} / "
+                f"{num(row['spot_iv_at_1_05']) * 100:.2f}")
+        print(f"{row['expiry']:>12} {forward:>28} {spot:>28}")
 
 
 def print_solver_cost(summary: list[dict]) -> None:
@@ -218,7 +237,7 @@ def plot_smile(smile: list[dict], summary: list[dict]) -> None:
                 branch = [r for r in rows if r["kind"] == kind]
                 if not branch:
                     continue
-                axis.plot([num(r["moneyness"]) for r in branch],
+                axis.plot([num(r["forward_moneyness"]) for r in branch],
                           [num(r["implied_vol"]) * 100 for r in branch],
                           marker=marker, color=colour,
                           label=label if kind == "put" else None,
@@ -227,14 +246,14 @@ def plot_smile(smile: list[dict], summary: list[dict]) -> None:
     for axis in (full, core):
         axis.axvline(1.0, color=AXIS, linewidth=1.0, linestyle=(0, (4, 3)),
                      zorder=0)
-        axis.set_xlabel("moneyness  K / S")
+        axis.set_xlabel("forward moneyness  K / F")
     full.set_ylabel("implied volatility  (% annualised)")
     core.set_xlim(*CORE)
 
     # The zoom window needs its own y-limit: the full panel is dominated by a
     # 76% wing that would flatten the core into a horizontal line.
     core_values = [num(r["implied_vol"]) * 100 for r in smile
-                   if CORE[0] <= num(r["moneyness"]) <= CORE[1]]
+                   if CORE[0] <= num(r["forward_moneyness"]) <= CORE[1]]
     pad = 0.06 * (max(core_values) - min(core_values))
     core.set_ylim(min(core_values) - pad, max(core_values) + pad)
 
@@ -244,13 +263,14 @@ def plot_smile(smile: list[dict], summary: list[dict]) -> None:
                    fontsize=10, color=INK_SECONDARY, loc="left", pad=8)
     full.legend(loc="upper right", fontsize=9)
 
-    full.text(0.02, 0.96, "circles: puts      squares: calls", fontsize=9,
-              color=MUTED, transform=full.transAxes, ha="left", va="top")
+    full.text(0.98, 0.74, "circles: puts      squares: calls", fontsize=9,
+              color=MUTED, transform=full.transAxes, ha="right", va="top")
 
     titles(fig, "Nifty 50 implied volatility is not one number",
            "16 November 2026 close. Out-of-the-money options only, inverted from "
-           "the exchange's own closing prices.\nIf Black-Scholes' constant "
-           "volatility held, each line would be flat.")
+           "the exchange's own closing prices against the forward\nput-call parity "
+           "reads out of those same prices. If Black-Scholes' constant volatility "
+           "held, each line would be flat.")
     out = RESULTS / "iv_smile.png"
     fig.savefig(out, dpi=170)
     plt.close(fig)
@@ -267,50 +287,50 @@ def plot_forward_diagnostic(smile: list[dict], summary: list[dict]) -> None:
     lookup = {row["expiry"]: row for row in summary}
 
     fig, axes = plt.subplots(1, len(order), figsize=(12.4, 4.9), sharey=False)
-    fig.subplots_adjust(left=0.06, right=0.985, top=0.76, bottom=0.13,
+    fig.subplots_adjust(left=0.06, right=0.985, top=0.72, bottom=0.13,
                         wspace=0.22)
 
     for axis, expiry in zip(axes, order):
         rows = grouped[expiry]
         info = lookup[expiry]
-        window = [r for r in rows if 0.97 <= num(r["moneyness"]) <= 1.03]
+        window = [r for r in rows if 0.97 <= num(r["forward_moneyness"]) <= 1.03]
 
         for kind, marker in (("put", "o"), ("call", "s")):
             branch = [r for r in window if r["kind"] == kind]
             if not branch:
                 continue
-            axis.plot([num(r["moneyness"]) for r in branch],
+            axis.plot([num(r["forward_moneyness"]) for r in branch],
                       [num(r["implied_vol"]) * 100 for r in branch],
+                      marker=marker, color=BLUE,
+                      label="market's forward (used)" if kind == "put" else None,
+                      **LINE, **MARK)
+            axis.plot([num(r["spot_moneyness"]) for r in branch],
+                      [num(r["implied_vol_spot"]) * 100 for r in branch],
                       marker=marker, color=ORANGE,
                       label="spot, no dividends" if kind == "put" else None,
-                      **LINE, **MARK)
-            axis.plot([num(r["forward_moneyness"]) for r in branch],
-                      [num(r["implied_vol_fwd"]) * 100 for r in branch],
-                      marker=marker, color=BLUE,
-                      label="market's own forward" if kind == "put" else None,
                       **LINE, **MARK)
 
         axis.axvline(1.0, color=AXIS, linewidth=1.0, linestyle=(0, (4, 3)),
                      zorder=0)
-        jump = num(info["atm_jump_put_minus_call"]) * 100
-        adjusted = num(info["atm_jump_forward_adjusted"]) * 100
+        gap = num(info["atm_jump_put_minus_call"]) * 100
+        spot_gap = num(info["spot_atm_jump_put_minus_call"]) * 100
         axis.set_title(
             f"{expiry}  ({info['days_to_expiry']} days)\n"
-            f"forward gap {num(info['forward_gap_points']):+.1f} pts  ->  "
-            f"jump {jump:+.2f} pt, adjusted {adjusted:+.2f} pt",
-            fontsize=9.5, color=INK_SECONDARY, loc="left", pad=8)
+            f"forward gap {num(info['forward_gap_points']):+.1f} pts\n"
+            f"ATM step {gap:+.2f} pt on F,  {spot_gap:+.2f} pt on S",
+            fontsize=9, color=INK_SECONDARY, loc="left", pad=8)
         # Each series is drawn against its own moneyness, because that is the
         # point: the two constructions disagree about where "at the money" is.
-        axis.set_xlabel("moneyness   K/S in orange,  K/F in blue")
+        axis.set_xlabel("moneyness   K/F in blue,  K/S in orange")
 
     axes[0].set_ylabel("implied volatility  (% annualised)")
     axes[0].legend(loc="upper right", fontsize=9)
 
-    titles(fig, "The step in the middle of the smile is the no-dividend assumption",
-           "Each smile has a discontinuity where the put branch meets the call "
-           "branch. Re-inverting the same quotes against the forward\nthat "
-           "put-call parity reads out of those same prices closes it -- and the "
-           "sign of the step follows the sign of the forward gap.")
+    titles(fig, "What the no-dividend assumption would have cost",
+           "The same quotes, inverted two ways. Against the spot and the T-bill "
+           "rate the put branch and the call branch stop meeting;\nagainst the "
+           "forward those same prices imply, they join -- and the sign of the step "
+           "follows the sign of the forward gap.")
     out = RESULTS / "iv_forward_diagnostic.png"
     fig.savefig(out, dpi=170)
     plt.close(fig)
