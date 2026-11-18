@@ -115,7 +115,9 @@ def validation(rows: list) -> None:
     fig.subplots_adjust(top=0.82, bottom=0.27, left=0.08, right=0.98)
     x = np.arange(len(rows))
     err = np.array([f(r, "lsm_price") - f(r, "american_tree") for r in rows])
-    half = np.array([1.959963985 * f(r, "lsm_se") for r in rows])
+    # Error bars straight from the interval the pricer reported.
+    half = np.array([[f(r, "lsm_price") - f(r, "ci_low") for r in rows],
+                     [f(r, "ci_high") - f(r, "lsm_price") for r in rows]])
     gap = np.array([f(r, "bermudan_tree") - f(r, "american_tree") for r in rows])
     ins = np.array([f(r, "in_sample_price") - f(r, "american_tree") for r in rows])
     ax.axhline(0, color=COLOUR["american"], linewidth=1.2, label="American tree (reference)")
@@ -327,42 +329,73 @@ def basis(rows: list) -> None:
 # 5. Boundary
 # ---------------------------------------------------------------------------
 
-def boundary(tree_rows: list, lsm_rows: list) -> None:
-    print("\n\nEXERCISE BOUNDARY (tree at 5,000 steps vs 20 independently fitted LSM rules)")
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), sharey=True)
-    fig.subplots_adjust(top=0.8, bottom=0.13, left=0.08, right=0.98, wspace=0.08)
-    for ax, case in zip(axes, ("case0", "case2")):
+def boundary(tree_rows: list, bermudan_rows: list, lsm_rows: list) -> None:
+    print("\n\nEXERCISE BOUNDARY (American tree at 5,000 steps, tree exercising on the "
+          "same 50 dates, 20 independently fitted LSM rules)")
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7.6), sharex=True, sharey="row",
+                             gridspec_kw={"height_ratios": [2.2, 1]})
+    fig.subplots_adjust(top=0.83, bottom=0.08, left=0.08, right=0.98, wspace=0.08, hspace=0.12)
+    for col, case in enumerate(("case0", "case2")):
+        top, bottom = axes[0, col], axes[1, col]
         tt = np.array([f(r, "t") for r in tree_rows if r["case"] == case])
         tb = np.array([f(r, "boundary") for r in tree_rows if r["case"] == case])
+        bt = np.array([f(r, "t") for r in bermudan_rows if r["case"] == case])
+        bb = np.array([f(r, "boundary") for r in bermudan_rows if r["case"] == case])
         per_seed = defaultdict(list)
         for r in lsm_rows:
             if r["case"] == case:
                 per_seed[r["seed"]].append((f(r, "t"), f(r, "boundary")))
         times = np.array([t for t, _ in next(iter(per_seed.values()))])
+        assert np.allclose(times, bt), "LSM and Bermudan tree dates must match"
         stack = np.array([[b for _, b in v] for v in per_seed.values()])
         median = np.nanmedian(stack, axis=0)
         low, high = np.nanmin(stack, axis=0), np.nanmax(stack, axis=0)
-        tree_at = np.interp(times, tt[np.isfinite(tb)], tb[np.isfinite(tb)])
-        diff = median - tree_at
+        american_at = np.interp(times, tt[np.isfinite(tb)], tb[np.isfinite(tb)])
+
+        diff = median - bb                       # the like-for-like comparison
+        contract_gap = bb - american_at          # what the discrete dates alone do
+        dates = np.arange(1, times.size + 1)
+        print(f"{case}: Bermudan minus American boundary: "
+              f"{np.nanmin(contract_gap):.2f} to {np.nanmax(contract_gap):.2f}")
+        print(f"  median LSM minus Bermudan tree, dates 1-5 / 6-40 / 41-49: "
+              + " / ".join(f"{np.nanmean(diff[s]):+.3f}" for s in
+                           (slice(0, 5), slice(5, 40), slice(40, None)))
+              + f";  dates 6-40: mean |diff| {np.nanmean(np.abs(diff[5:40])):.3f}, "
+              f"max |diff| {np.nanmax(np.abs(diff[5:40])):.3f}")
+        print("  date  " + " ".join(f"{m:>6}" for m in (1, 3, 5, 10, 20, 30, 40, 45, 47, 49)))
+        print("  diff  " + " ".join(f"{diff[m - 1]:+6.2f}" for m in
+                                    (1, 3, 5, 10, 20, 30, 40, 45, 47, 49)))
+        print(f"  (old comparison) median LSM minus American, dates 6-40: "
+              f"{np.nanmean((median - american_at)[5:40]):+.3f}")
         spread = high - low
-        print(f"{case}: median LSM minus tree, by thirds of the year: "
-              + ", ".join(f"{np.nanmean(diff[s]):+.3f}" for s in
-                          (slice(0, 16), slice(16, 33), slice(33, None)))
-              + f"; mean |diff| {np.nanmean(np.abs(diff)):.3f}; "
-              f"seed spread (max-min) median {np.nanmedian(spread):.3f}, "
-              f"largest {np.nanmax(spread):.3f} at t={times[np.nanargmax(spread)]:.2f}")
+        print(f"  seed spread (max-min) median {np.nanmedian(spread):.3f}, "
+              f"largest {np.nanmax(spread):.3f} at date {dates[np.nanargmax(spread)]}")
+
         for row in stack:
-            ax.plot(times, row, color=COLOUR["out"], alpha=0.18, linewidth=1)
-        ax.plot(times, median, color=COLOUR["out"], label="LSM, median of 20 fitted rules", **LINE)
-        ax.plot(tt, tb, color=COLOUR["american"], linewidth=1.4, label="American tree")
-        ax.axhline(40, color=MUTED, linestyle=":", linewidth=1)
-        ax.set_xlabel("time (years)")
+            top.plot(times, row, color=COLOUR["out"], alpha=0.18, linewidth=1)
+        top.plot(times, median, color=COLOUR["out"], label="LSM, median of 20 fitted rules",
+                 **LINE)
+        top.plot(bt, bb, "o", color=COLOUR["bermudan"], markersize=3.5,
+                 label="tree, exercise on the same 50 dates")
+        top.plot(tt, tb, color=COLOUR["american"], linewidth=1.4,
+                 label="American tree (exercise any time)")
+        top.axhline(40, color=MUTED, linestyle=":", linewidth=1)
         sigma = {"case0": 0.2, "case2": 0.4}[case]
-        ax.set_title(f"S=36, σ={sigma}, T=1", fontsize=10, color=INK_SECONDARY)
-        ax.legend(fontsize=9, loc="lower right")
-    axes[0].set_ylabel("critical stock price S*(t): exercise below it")
-    titles(fig, "The early-exercise boundary: LSM against the tree",
-           "Thin lines: 20 rules fitted on independent seeds. Strike 40 dotted.")
+        top.set_title(f"S=36, σ={sigma}, T=1", fontsize=10, color=INK_SECONDARY)
+        top.legend(fontsize=8.5, loc="lower right")
+
+        for row in stack:
+            bottom.plot(times, row - bb, color=COLOUR["out"], alpha=0.18, linewidth=1)
+        bottom.plot(times, diff, color=COLOUR["out"], **LINE)
+        bottom.axhline(0, color=COLOUR["bermudan"], linewidth=1.4)
+        bottom.set_xlabel("time (years)")
+    axes[0, 0].set_ylabel("critical price S*(t): exercise below it")
+    axes[1, 0].set_ylabel("LSM minus same-dates tree")
+    axes[1, 0].set_ylim(-2.6, 4.6)
+    titles(fig, "The early-exercise boundary: LSM against a tree on the same 50 dates",
+           "Close mid-year; too low (exercising too late) in the last few dates; "
+           "off at the first dates at σ=0.4.\nThin lines: 20 rules fitted on independent "
+           "seeds. Strike 40 dotted.")
     fig.savefig(RESULTS / "lsm_boundary.png", dpi=150)
     plt.close(fig)
 
@@ -395,7 +428,8 @@ def main() -> None:
     paths(read_csv("lsm_paths.csv"))
     dates(read_csv("lsm_dates.csv"))
     basis(read_csv("lsm_basis.csv"))
-    boundary(read_csv("lsm_boundary_tree.csv"), read_csv("lsm_boundary_lsm.csv"))
+    boundary(read_csv("lsm_boundary_tree.csv"), read_csv("lsm_boundary_bermudan.csv"),
+             read_csv("lsm_boundary_lsm.csv"))
     call(read_csv("lsm_call.csv"))
     print("\nCharts written to results/lsm_*.png")
 

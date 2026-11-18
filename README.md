@@ -21,7 +21,7 @@ Phase 5.
 | 6 | Implied volatility and the Nifty 50 smile, on real NSE data | **done** |
 | 7 | American options by Longstaff-Schwartz Monte Carlo, validated against the tree | **done** |
 
-4,732 tests pass (plus one pre-registered miss kept as a strict expected failure) across the
+4,742 tests pass (plus one pre-registered miss kept as a strict expected failure) across the
 models, the harness, the variance-reduced estimators, the C++ engine, the implied-volatility
 solver and the Longstaff-Schwartz pricer.
 
@@ -509,7 +509,9 @@ forty-three, and the minimum of the curve slides from `K/F` 1.01 to 1.05 as matu
 
 ## Phase 7 results — American options by Longstaff-Schwartz
 
-Run `python analysis/run_phase7.py` (~17 min) then `python analysis/plot_phase7.py`.
+Run `python analysis/run_phase7.py` (~17 min) then `python analysis/plot_phase7.py`. To re-run one
+experiment, name it: `python analysis/run_phase7.py boundary` (~40 s). The names are
+validation, paths, dates, basis, boundary and call.
 
 A European option is an average; an American option is a decision. At each date the holder
 compares exercising now with the **continuation value**, the expected discounted value of
@@ -660,25 +662,53 @@ over out-of-sample grows from +0.009 at degree 0 to +0.021 at degree 6, while th
 does not improve. That case also keeps a residual low bias of about 0.011 (2.1–2.7 standard errors
 of the mean) at every degree from 3 to 6, which is half the standard error of a single run.
 
-### The exercise boundary: visibly wrong, and almost free
+### The exercise boundary: close in the middle, too late at the end
 
 ![Exercise boundary](results/lsm_boundary.png)
 
-The boundary is the critical price below which exercising beats waiting. The tree's comes from
-its backward induction at 5,000 steps. LSM's is where each date's fitted continuation curve
-crosses the payoff, taken from 20 rules fitted on independent seeds.
+The boundary is the critical price below which exercising beats waiting. LSM's is where each
+date's fitted continuation curve crosses the payoff, taken from 20 rules fitted on independent
+seeds. It is compared with two tree boundaries on the same 5,000-step lattice:
+- **the tree that exercises only on LSM's 50 dates**: the like-for-like reference, because the
+  fitted rule cannot exercise anywhere else;
+- **the American tree**, which can exercise at any step.
 
-**This is the second place my prediction was wrong.** I expected LSM to sit close to the tree and
-to be noisiest near expiry. Instead it is **systematically too high**, so the fitted rule
-exercises too early:
-- at σ=0.2 by about +0.5 over the first two thirds of the year, more than the spread between
-  seeds (median 0.36), so it is a bias rather than noise;
-- at σ=0.4 by +0.7 to +1.8, with almost every one of the 20 rules above the tree for most of the
-  year.
+The two references are far apart. Holding a Bermudan option is worth less, because there are
+fewer chances to exercise later, so exercising wins over a wider range of prices. Its boundary
+sits 0.38–0.62 above the American one at σ=0.2 and 0.56–1.22 above it at σ=0.4.
 
-It agrees with the tree only in the last third of the year (−0.03 at σ=0.2). Its worst point is
-the first few dates at σ=0.4. There the paths have barely left 36, and the true boundary (~24) is
-outside anything the regression saw, so the curve there describes no actual decision.
+*This comparison was corrected after a code review.* The first version of this section measured
+LSM against the American boundary only. It concluded that LSM's boundary was "systematically too
+high", so the rule "exercises too early", and blamed the cubic basis. That offset was mostly the
+gap between the two contracts, not an error in LSM: the same mix-up the Bermudan *price*
+reference was set up to avoid, which I failed to carry over to the boundary.
+
+Against the same-dates tree (median of the 20 rules minus the tree):
+
+| exercise date (of 50) | 1 | 3 | 5 | 10 | 20 | 30 | 40 | 45 | 47 | 49 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| σ=0.2 | +0.22 | +0.28 | +0.23 | +0.03 | −0.09 | −0.06 | −0.42 | −0.81 | −0.85 | −1.12 |
+| σ=0.4 | +4.06 | +1.74 | +0.74 | +0.67 | +0.07 | −0.05 | +0.23 | −0.41 | −1.13 | −2.15 |
+
+- **Through the middle of the year LSM is accurate to about 0.1–0.3.** Over dates 6–40 the mean
+  absolute difference is 0.10 at σ=0.2 and 0.28 at σ=0.4. That is comparable to the spread
+  between seeds (median 0.36 and 1.10). The single worst dates are 0.42 and 0.77.
+- **Near expiry it exercises too late.** Over the last nine dates LSM's boundary is too low by
+  0.76 on average at σ=0.2 (1.12 on the last date) and by 0.63 at σ=0.4 (2.15 on the last date).
+  Almost every one of the 20 rules shows it, so this is a bias, not noise. The cause was not
+  tested. One possibility is that close to expiry the continuation value bends sharply near the
+  strike, more than a cubic fitted over the whole in-the-money range can follow.
+- **At σ=0.4 the first dates are off** (+4.1 on date 1, +2.1 on average over dates 1–5). There the
+  paths have barely left 36, while the true boundary (~25) lies below almost everything the
+  regression saw, so the fitted curve there describes no real decision.
+
+The old finding that LSM "agrees with the tree in the last third of the year" was two errors
+cancelling. Near expiry, LSM's too-late exercise is about the same size as the Bermudan–American
+gap, so LSM lands on the American curve by coincidence.
+
+The pre-registered prediction was "close to the tree's, noisiest close to expiry". Against the
+right reference the first half holds. The second does not: near expiry the rule is not noisy, it
+is consistently late.
 
 The price barely notices. The same degree-3 rule's out-of-sample price is within 0.001–0.005 of
 the Bermudan value (basis and paths experiments). The reason is **smooth pasting**. At the optimal
@@ -714,8 +744,8 @@ close to expiry: one date out, the true advantage of waiting, interest on the st
   variate would help a lot. Neither is combined with LSM here.
 - **Only the easy case.** A put, one factor, constant volatility, no dividends: exactly the case
   where a tree exists and is much faster. Nothing here tests LSM where it is actually needed.
-- **The boundary bias was measured for degree 3 only.** Whether higher degrees remove it was not
-  tested.
+- **The boundary was measured for degree 3 only, on two cases.** Whether a higher degree or more
+  paths removes the too-late exercise near expiry was not tested.
 - **The convergence sweeps reuse seeds.** The same seeds run at every path count, date count and
   degree, so their rows are correlated. 20 seeds per point resolves coverage only to about ±0.05.
 
@@ -731,7 +761,7 @@ src/pricing/cpp_backend.py         loads the C++ engine through a C ABI with cty
 cpp/mc_engine.cpp                  the four estimators in C++17, counter-based RNG, threaded
 src/pricing/implied_vol.py         inverts Black-Scholes for sigma: safeguarded Newton-Raphson
 src/pricing/lsm.py                 Longstaff-Schwartz: American options by regression on paths
-src/pricing/exercise_tree.py       Bermudan tree and the tree's exercise boundary (Phase 7 references)
+src/pricing/exercise_tree.py       Bermudan tree, American and Bermudan exercise boundaries (Phase 7 references)
 src/experiments/harness.py         measures any estimator: bias, RMSE, coverage, runtime, cost
 tests/                             pytest suite (textbook values, parity, finite differences,
                                    edge cases, CI coverage, calibrated fake estimators)

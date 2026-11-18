@@ -1,6 +1,10 @@
 """Run the Phase 7 experiments and write the CSVs in results/.
 
-    python analysis/run_phase7.py          (about 17 minutes)
+    python analysis/run_phase7.py              (all six, about 17 minutes)
+    python analysis/run_phase7.py boundary     (only experiment 5, about 40 s)
+
+Section names: validation, paths, dates, basis, boundary, call. Any subset
+can be given; the CSVs of the sections not run are left as they are.
 
 Every setting of the validation run is fixed in advance in
 docs/phase7_preregistration.md; this script implements exactly that. Fixed
@@ -15,13 +19,16 @@ Six experiments:
 3. ``lsm_dates.csv`` -- error against the number of exercise dates, with the
    Bermudan tree for each date count.
 4. ``lsm_basis.csv`` -- how much the regression basis matters.
-5. ``lsm_boundary_tree.csv``, ``lsm_boundary_lsm.csv`` -- the critical stock
-   price over time, from the tree and from 20 independently fitted LSM rules.
+5. ``lsm_boundary_tree.csv``, ``lsm_boundary_bermudan.csv``,
+   ``lsm_boundary_lsm.csv`` -- the critical stock price over time, from the
+   American tree, from a tree that exercises only on LSM's 50 dates (the
+   like-for-like comparison), and from 20 independently fitted LSM rules.
 6. ``lsm_call.csv`` -- an American call on a non-dividend stock, where early
    exercise is never optimal: how often the fitted rule exercises anyway, and
    what that costs, measured on the same paths as the European payoff.
 """
 
+import argparse
 import csv
 import math
 import sys
@@ -37,6 +44,7 @@ from pricing.binomial import american_binomial                        # noqa: E4
 from pricing.black_scholes import price as black_scholes              # noqa: E402
 from pricing.common import payoff                                     # noqa: E402
 from pricing.exercise_tree import (bermudan_binomial,                 # noqa: E402
+                                   bermudan_exercise_boundary,
                                    tree_exercise_boundary)
 from pricing.lsm import (apply_exercise_rule, lsm_exercise_boundary,  # noqa: E402
                          lsm_price, simulate_paths)
@@ -56,11 +64,10 @@ DEGREE = 3
 N_TRAIN = N_PRICE = 100_000
 CASE_SEED = 7000                  # case i uses seed 7000 + i
 TREE_STEPS = 10_000               # reference; uncertainty from doubling it
-Z_95 = 1.959963984540054
 
 # ---------------------------------------------------------------------------
-# Convergence experiments, on case 0 (S=36, sigma=0.2, T=1: the largest
-# early-exercise premium of the sigma=0.2 cases)
+# Convergence experiments, on case 0 (S=36, sigma=0.2, T=1: the first case of
+# the table, deep enough in the money that early exercise matters)
 # ---------------------------------------------------------------------------
 BASE = (36.0, 0.20, 1.0)
 PATH_COUNTS = [500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000]
@@ -70,7 +77,8 @@ DATE_SEEDS = range(20_000, 20_020)          # 20 seeds
 BASES = [(d, False) for d in range(0, 7)] + [(3, True)]   # (degree, weighted)
 BASIS_SEEDS = range(30_000, 30_020)         # 20 seeds
 BOUNDARY_CASES = {"case0": (36.0, 0.20, 1.0), "case2": (36.0, 0.40, 1.0)}
-BOUNDARY_TREE_STEPS = 5_000
+BOUNDARY_TREE_STEPS = 5_000       # the Bermudan tree uses the same lattice:
+                                  # 50 dates x 100 steps per date
 BOUNDARY_SEEDS = range(40_000, 40_020)      # 20 seeds
 CALL_SPOTS = [36.0, 40.0, 44.0, 50.0]
 CALL_SEEDS = range(50_000, 50_020)
@@ -237,20 +245,27 @@ def run_basis() -> None:
 # ---------------------------------------------------------------------------
 
 def run_boundary() -> None:
-    print("\n5. Exercise boundary (tree vs 20 independently fitted LSM rules)")
-    tree_rows, lsm_rows = [], []
+    print("\n5. Exercise boundary (American tree, tree exercising on the same 50 dates, "
+          "20 independently fitted LSM rules)")
+    tree_rows, bermudan_rows, lsm_rows = [], [], []
     for label, (S, sigma, T) in BOUNDARY_CASES.items():
+        n_dates = n_dates_for(T)
         times, boundary = tree_exercise_boundary(S, K, R, sigma, T, BOUNDARY_TREE_STEPS, "put")
         tree_rows += [{"case": label, "t": f"{t:.6f}", "boundary": f"{b:.6f}"}
                       for t, b in zip(times, boundary)]
+        times, boundary = bermudan_exercise_boundary(
+            S, K, R, sigma, T, n_dates, BOUNDARY_TREE_STEPS // n_dates, "put")
+        bermudan_rows += [{"case": label, "t": f"{t:.6f}", "boundary": f"{b:.6f}"}
+                          for t, b in zip(times, boundary)]
         for seed in BOUNDARY_SEEDS:
             res = lsm_price(S, K, R, sigma, T, "put", n_paths=N_TRAIN,
-                            n_dates=n_dates_for(T), degree=DEGREE, seed=seed)
+                            n_dates=n_dates, degree=DEGREE, seed=seed)
             times, boundary = lsm_exercise_boundary(res.rule)
             lsm_rows += [{"case": label, "seed": seed, "t": f"{t:.6f}",
                           "boundary": f"{b:.6f}"} for t, b in zip(times, boundary)]
         print(f"  {label} done")
     write_csv("lsm_boundary_tree.csv", tree_rows)
+    write_csv("lsm_boundary_bermudan.csv", bermudan_rows)
     write_csv("lsm_boundary_lsm.csv", lsm_rows)
 
 
@@ -290,16 +305,28 @@ def run_call() -> None:
     write_csv("lsm_call.csv", rows)
 
 
+SECTIONS = {
+    "validation": run_validation,
+    "paths": run_paths,
+    "dates": run_dates,
+    "basis": run_basis,
+    "boundary": run_boundary,
+    "call": run_call,
+}
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the Phase 7 experiments.")
+    parser.add_argument("sections", nargs="*", choices=list(SECTIONS),
+                        help="which experiments to run (default: all)")
+    chosen = parser.parse_args().sections or list(SECTIONS)
     RESULTS.mkdir(exist_ok=True)
     start = time.perf_counter()
-    run_validation()
-    run_paths()
-    run_dates()
-    run_basis()
-    run_boundary()
-    run_call()
-    print(f"\nAll Phase 7 experiments done in {time.perf_counter() - start:.0f} s")
+    for name in SECTIONS:                     # always in the documented order
+        if name in chosen:
+            SECTIONS[name]()
+    print(f"\nPhase 7 experiments ({', '.join(n for n in SECTIONS if n in chosen)}) "
+          f"done in {time.perf_counter() - start:.0f} s")
 
 
 if __name__ == "__main__":
