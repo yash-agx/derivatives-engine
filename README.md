@@ -19,9 +19,11 @@ Phase 5.
 | 4 | Antithetic and control variates; variance reduction and time-adjusted efficiency | **done** |
 | 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | **done** |
 | 6 | Implied volatility and the Nifty 50 smile, on real NSE data | **done** |
+| 7 | American options by Longstaff-Schwartz Monte Carlo, validated against the tree | **done** |
 
-4,595 tests pass across the models, the harness, the variance-reduced estimators, the
-C++ engine and the implied-volatility solver.
+4,732 tests pass (plus one pre-registered miss kept as a strict expected failure) across the
+models, the harness, the variance-reduced estimators, the C++ engine, the implied-volatility
+solver and the Longstaff-Schwartz pricer.
 
 **Phase 1** — `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
 types: Hull's worked examples, put-call parity, every Greek against a central finite difference,
@@ -41,6 +43,10 @@ through that same harness: fast *and* demonstrably still correct.
 
 **Phase 6** — Black-Scholes inverted for volatility by safeguarded Newton-Raphson, and pointed
 at one day's real NSE option chain: 417 Nifty 50 quotes, and the smile they imply.
+
+**Phase 7** — American puts priced by simulation (Longstaff-Schwartz least-squares regression),
+with the rule fitted and priced on independent paths, checked against the tree on 20 textbook
+cases under criteria committed before any result existed.
 
 ## Phase 2 results
 
@@ -501,6 +507,218 @@ constant in time: the 0.95-to-1.05 spread is 1.80 vol points at seven days and 2
 forty-three, and the minimum of the curve slides from `K/F` 1.01 to 1.05 as maturity lengthens.
 
 
+## Phase 7 results — American options by Longstaff-Schwartz
+
+Run `python analysis/run_phase7.py` (~17 min) then `python analysis/plot_phase7.py`.
+
+A European option is an average; an American option is a decision. At each date the holder
+compares exercising now with the **continuation value**, the expected discounted value of
+holding on given today's price. A simulated path has only one future, so it cannot tell you that
+expectation by itself. Longstaff-Schwartz (LSM) gets it from all the paths at once. At each
+exercise date, working backwards from expiry, it regresses every in-the-money path's *realised*
+discounted cash flow on Laguerre polynomials of `S/K`. The fitted curve estimates the
+continuation value, and the path is exercised wherever the payoff beats it
+(`src/pricing/lsm.py`).
+
+Fitting the rule on the same paths it then prices is a mild form of looking ahead, so the rule
+is fitted on one set of paths and priced on a second, independent set. The two sets come from
+one seed via `SeedSequence.spawn`. A fixed rule can be no better than the optimal one, so this
+**out-of-sample** price is low-biased. The **in-sample** price is reported beside it.
+
+The test cases, reference values and pass rule were fixed in
+[`docs/phase7_preregistration.md`](docs/phase7_preregistration.md) and committed before any LSM
+price was computed.
+
+### Validation: 19 of 20 against the American tree, 20 of 20 against the Bermudan one
+
+![LSM validation](results/lsm_validation.png)
+
+The 20 American puts of Longstaff & Schwartz (2001), Table 1 (K=40, r=6%, S 36–44, σ 0.2/0.4,
+T 1/2). Settings: 100,000 training + 100,000 pricing paths, 50 exercise dates a year, Laguerre
+degree 3. The reference is the Phase 2 American tree at 10,000 steps; doubling the steps moves it
+by at most 1.6e-4. The Bermudan tree (`src/pricing/exercise_tree.py`) may exercise only on
+LSM's 50-per-year dates, so it prices the same contract LSM prices.
+
+| S | σ | T | European | American tree | Bermudan tree | LSM (out) | SE | z vs American | in-sample |
+|---|---|---|---|---|---|---|---|---|---|
+| 36 | 0.2 | 1 | 3.8443 | 4.4867 | 4.4779 | 4.4880 | 0.0092 | +0.14 | 4.4693 |
+| 36 | 0.2 | 2 | 3.7630 | 4.8483 | 4.8403 | 4.8404 | 0.0110 | −0.72 | 4.8296 |
+| 36 | 0.4 | 1 | 6.7114 | 7.1090 | 7.1013 | 7.1110 | 0.0192 | +0.10 | 7.1128 |
+| 36 | 0.4 | 2 | 7.7000 | 8.5143 | 8.5069 | 8.4903 | 0.0225 | −1.07 | 8.5025 |
+| 38 | 0.2 | 1 | 2.8519 | 3.2572 | 3.2502 | 3.2440 | 0.0093 | −1.42 | 3.2418 |
+| 38 | 0.2 | 2 | 2.9906 | 3.7514 | 3.7448 | 3.7411 | 0.0110 | −0.93 | 3.7317 |
+| 38 | 0.4 | 1 | 5.8343 | 6.1547 | 6.1477 | 6.1557 | 0.0186 | +0.05 | 6.1319 |
+| 38 | 0.4 | 2 | 6.9788 | 7.6750 | 7.6682 | 7.6672 | 0.0224 | −0.35 | 7.6734 |
+| 40 | 0.2 | 1 | 2.0664 | 2.3195 | 2.3141 | 2.3139 | 0.0087 | −0.66 | 2.3206 |
+| 40 | 0.2 | 2 | 2.3559 | 2.8899 | 2.8846 | 2.8927 | 0.0106 | +0.26 | 2.8767 |
+| 40 | 0.4 | 1 | 5.0596 | 5.3182 | 5.3119 | 5.3045 | 0.0179 | −0.77 | 5.3083 |
+| **40** | **0.4** | **2** | 6.3260 | 6.9234 | 6.9170 | **6.8797** | 0.0219 | **−1.99** | 6.8980 |
+| 42 | 0.2 | 1 | 1.4645 | 1.6212 | 1.6170 | 1.6193 | 0.0076 | −0.24 | 1.6195 |
+| 42 | 0.2 | 2 | 1.8414 | 2.2168 | 2.2124 | 2.2030 | 0.0096 | −1.43 | 2.2111 |
+| 42 | 0.4 | 1 | 4.3787 | 4.5882 | 4.5825 | 4.5969 | 0.0172 | +0.51 | 4.5883 |
+| 42 | 0.4 | 2 | 5.7356 | 6.2504 | 6.2445 | 6.2257 | 0.0212 | −1.17 | 6.2345 |
+| 44 | 0.2 | 1 | 1.0169 | 1.1130 | 1.1099 | 1.1079 | 0.0066 | −0.78 | 1.1126 |
+| 44 | 0.2 | 2 | 1.4292 | 1.6933 | 1.6899 | 1.6833 | 0.0087 | −1.15 | 1.6788 |
+| 44 | 0.4 | 1 | 3.7828 | 3.9528 | 3.9477 | 3.9351 | 0.0165 | −1.07 | 3.9523 |
+| 44 | 0.4 | 2 | 5.2020 | 5.6469 | 5.6414 | 5.6413 | 0.0206 | −0.27 | 5.6476 |
+
+**The pre-registered rule passes: 19 of 20** confidence intervals contain the American tree
+value, against a threshold of 18. **The miss is S=40, σ=0.4, T=2**: LSM 6.8797 ± 0.0219 against
+6.9234, z = −1.99, just outside the interval. It misses on the low side, as the pre-registration
+predicted any miss would. Against the Bermudan tree that case passes (z = −1.70), and **so do
+all 20**. LSM is above the European put in every case, by 9 to 98 standard errors.
+
+The misses are not random noise around zero. **15 of 20 estimates sit below the American value,
+and the mean z is −0.65 ± 0.15**, four standard errors from zero. Against the Bermudan value the
+mean z is −0.18 ± 0.16, indistinguishable from zero. So the systematic shortfall is almost
+entirely the contract. LSM exercises on 50 dates a year, while the American tree exercises at
+every instant. That gap is 0.003–0.009, a third to a half of one standard error, which is why the
+intervals still mostly cover the American value.
+
+**That pass is not robust.** On the S=36, σ=0.2, T=1 case, repeated over 100 seeds, the interval
+covers the American value 88–95% of the time up to 20,000 paths, then 84% at 50,000 and
+**75% at 100,000**. The Bermudan gap does not shrink with paths, but the interval does. With a
+few million paths LSM would fail this test, and correctly so: it prices a different contract.
+The Bermudan comparison is the one that says LSM itself is right.
+
+Runtime: 0.98 s per case for 200,000 paths. The 10,000-step tree takes 0.8 s, and a 2,500-step
+tree is within 1e-4 in 0.09 s. **For a one-factor American put the tree is far cheaper.** The
+argument for LSM is problems a tree cannot handle, such as several underlyings or path-dependent
+payoffs, where a lattice grows exponentially and a regression does not.
+
+### The in-sample bias, and why one run cannot show it
+
+![Error against paths](results/lsm_paths.png)
+
+At 100,000 paths the in-sample minus out-of-sample gap averages **+0.0000** over the 20 validation
+cases and is positive in only 12 of them. One run cannot see the foresight bias: it is smaller
+than the noise of a single run. Averaging 100 seeds on the S=36, σ=0.2, T=1 case shows it
+clearly. Both biases are measured against the Bermudan tree, ± the standard error of the mean:
+
+| paths | out-of-sample bias | in-sample bias | in − out | RMSE (Bermudan) | RMSE (American) | mean SE | coverage (American) |
+|---|---|---|---|---|---|---|---|
+| 500 | −0.070 ± 0.013 | +0.131 ± 0.013 | +0.201 | 0.148 | 0.152 | 0.133 | 0.93 |
+| 2,000 | −0.013 ± 0.007 | +0.044 ± 0.006 | +0.057 | 0.069 | 0.071 | 0.066 | 0.93 |
+| 10,000 | −0.006 ± 0.003 | +0.009 ± 0.003 | +0.015 | 0.028 | 0.031 | 0.029 | 0.95 |
+| 50,000 | −0.005 ± 0.001 | −0.002 ± 0.001 | +0.003 | 0.013 | 0.018 | 0.013 | 0.84 |
+| 100,000 | −0.0045 ± 0.0009 | −0.0019 ± 0.0009 | +0.003 | 0.010 | 0.016 | 0.009 | 0.75 |
+
+- **With few paths, the two estimates bracket the answer from opposite sides.** At 500 paths
+  the in-sample price is 0.13 too high (an overfitted rule, scored on the data it was fitted to)
+  and the out-of-sample price is 0.07 too low (the same poor rule, scored honestly). The gap
+  between them closes from 0.20 to 0.003, as predicted.
+- **From about 50,000 paths, both sit slightly *below* the Bermudan value.** By then foresight no
+  longer matters. What is left is that a degree-3 polynomial is not the true continuation
+  function, which costs both estimates about 0.002–0.005. These are 2–5 standard errors of the
+  mean, and the same 100 seeds are reused at every path count, so the rows are correlated.
+- **The noise follows the 1/√N law** (log-log slope −0.52 against the Bermudan reference), and the
+  reported standard error matches the real spread. Against the American reference the RMSE
+  heads towards the 0.0088 Bermudan gap, which no number of paths removes.
+
+### Exercise dates: LSM prices the Bermudan contract
+
+![Error against exercise dates](results/lsm_dates.png)
+
+| dates M | 1 | 2 | 5 | 10 | 25 | 50 | 100 | 200 |
+|---|---|---|---|---|---|---|---|---|
+| Bermudan tree | 4.0000 | 4.1985 | 4.3908 | 4.4426 | 4.4691 | 4.4779 | 4.4823 | 4.4845 |
+| American − Bermudan | 0.487 | 0.288 | 0.096 | 0.044 | 0.018 | 0.0088 | 0.0044 | 0.0022 |
+| LSM − Bermudan (mean of 20) | 0.000 | +0.002 | +0.002 | −0.001 | −0.001 | −0.004 | −0.002 | −0.004 |
+
+LSM follows the Bermudan tree to within 0.005 at every date count. The Bermudan value is inside
+its 95% interval in 95–100% of runs, and LSM never tracks the American value instead. **The cost
+of exercising on discrete dates falls exactly like 1/M** (slope −1.00): double the dates and the
+gap halves. With a single date the holder compares the European put (3.84) with exercising now
+(4.00) and exercises now; both methods give exactly 4.0000. Runtime grows linearly with the
+number of dates (16 s for 20 runs at M=50, 67 s at M=200), so dates and paths compete for the
+same budget.
+
+### The basis: degree 3 is where it stops mattering
+
+![Basis degree](results/lsm_basis.png)
+
+The out-of-sample price is a lower bound, so **a better basis gives a higher price**. Mean over
+20 seeds, minus the Bermudan tree (± about 0.0015 in the first column and 0.0047 in the second):
+
+| basis | S=36, σ=0.2, T=1 | S=36, σ=0.4, T=2 |
+|---|---|---|
+| degree 0 (a constant) | −0.150 | −0.881 |
+| degree 1 | −0.061 | −0.140 |
+| degree 2 | −0.012 | −0.028 |
+| **degree 3** | **−0.001** | **−0.013** |
+| degree 4 / 5 / 6 | +0.000 / +0.002 / +0.002 | −0.010 / −0.010 / −0.012 |
+| degree 3, paper's weighted form | −0.001 | −0.011 |
+
+**My prediction was wrong here.** I expected degrees 2 and 3 to be within noise of each other.
+Degree 2 is clearly worse, by 0.010 and 0.015, and degree 3 is where the gains stop. A constant
+alone is a disaster: exercising whenever the payoff beats the *average* continuation value gives
+up 0.88 on the long, volatile option, 10% of its price. The paper's weighted Laguerre basis and
+plain polynomials with the same number of columns give the same answer.
+
+Columns beyond degree 3 buy overfitting instead of accuracy. On the T=2 case the in-sample excess
+over out-of-sample grows from +0.009 at degree 0 to +0.021 at degree 6, while the honest price
+does not improve. That case also keeps a residual low bias of about 0.011 (2.1–2.7 standard errors
+of the mean) at every degree from 3 to 6, which is half the standard error of a single run.
+
+### The exercise boundary: visibly wrong, and almost free
+
+![Exercise boundary](results/lsm_boundary.png)
+
+The boundary is the critical price below which exercising beats waiting. The tree's comes from
+its backward induction at 5,000 steps. LSM's is where each date's fitted continuation curve
+crosses the payoff, taken from 20 rules fitted on independent seeds.
+
+**This is the second place my prediction was wrong.** I expected LSM to sit close to the tree and
+to be noisiest near expiry. Instead it is **systematically too high**, so the fitted rule
+exercises too early:
+- at σ=0.2 by about +0.5 over the first two thirds of the year, more than the spread between
+  seeds (median 0.36), so it is a bias rather than noise;
+- at σ=0.4 by +0.7 to +1.8, with almost every one of the 20 rules above the tree for most of the
+  year.
+
+It agrees with the tree only in the last third of the year (−0.03 at σ=0.2). Its worst point is
+the first few dates at σ=0.4. There the paths have barely left 36, and the true boundary (~24) is
+outside anything the regression saw, so the curve there describes no actual decision.
+
+The price barely notices. The same degree-3 rule's out-of-sample price is within 0.001–0.005 of
+the Bermudan value (basis and paths experiments). The reason is **smooth pasting**. At the optimal
+boundary the option's value meets the payoff with the same slope, so near the boundary
+`continuation − payoff` grows like `(S − S*)²`. Exercising a distance `δ` on the wrong side loses
+only of order `δ²`. That flatness is also why the boundary is hard to estimate: near `S*` the two
+curves the regression has to tell apart are almost identical. **A Monte Carlo American price
+can be trusted much more than the exercise strategy behind it.**
+
+### The American call: never exercise early, almost
+
+With no dividends, exercising a call early is never optimal, so the American call is the European
+call. In 80 runs (S = 36, 40, 44, 50, 20 seeds each), every LSM interval contains the
+Black-Scholes price.
+
+The fitted rule is not exactly "never exercise", though. Re-applied to fresh paths, beside the
+European payoff on the *same* paths, it exercises early on **0.2–0.8% of paths**. That costs 0.0007
+to 0.0025, which is measurable (3–5 standard errors of the paired difference) but under a tenth of
+a standard error of the price. Where those exercises happen was not measured. The likely place is
+close to expiry: one date out, the true advantage of waiting, interest on the strike
+`K(1 − e^{−rτ})`, is only about 0.05 and comparable to the regression's error.
+
+### Limitations
+- **The reference is the wrong contract for a strict test.** The tree is American and LSM is
+  Bermudan, and the pass rule tested against the American value as specified. It passed because
+  the 0.003–0.009 gap is under half a standard error at 100,000 paths; with many more paths it
+  would fail. The Bermudan tree is the right reference for LSM's own accuracy. The American one
+  answers a different question: how close a 50-date simulation gets to the real American option.
+- **One pre-registered seed per case.** 19/20 is one draw. The case-0 coverage experiment puts the
+  per-case chance of passing against the American value nearer 75% than 95% at this budget, so a
+  different seed set could well have produced two or three misses.
+- **Plain Monte Carlo inside LSM.** The paper uses antithetic paths, and Phase 4 showed a control
+  variate would help a lot. Neither is combined with LSM here.
+- **Only the easy case.** A put, one factor, constant volatility, no dividends: exactly the case
+  where a tree exists and is much faster. Nothing here tests LSM where it is actually needed.
+- **The boundary bias was measured for degree 3 only.** Whether higher degrees remove it was not
+  tested.
+- **The convergence sweeps reuse seeds.** The same seeds run at every path count, date count and
+  degree, so their rows are correlated. 20 seeds per point resolves coverage only to about ±0.05.
+
 ## Layout
 
 ```
@@ -512,14 +730,17 @@ src/pricing/variance_reduction.py  antithetic, control variate, both, importance
 src/pricing/cpp_backend.py         loads the C++ engine through a C ABI with ctypes
 cpp/mc_engine.cpp                  the four estimators in C++17, counter-based RNG, threaded
 src/pricing/implied_vol.py         inverts Black-Scholes for sigma: safeguarded Newton-Raphson
+src/pricing/lsm.py                 Longstaff-Schwartz: American options by regression on paths
+src/pricing/exercise_tree.py       Bermudan tree and the tree's exercise boundary (Phase 7 references)
 src/experiments/harness.py         measures any estimator: bias, RMSE, coverage, runtime, cost
 tests/                             pytest suite (textbook values, parity, finite differences,
                                    edge cases, CI coverage, calibrated fake estimators)
 analysis/fetch_phase6_data.py      downloads one day's NSE F&O bhavcopy, keeps the NIFTY rows
-analysis/run_phase{2..6}.py        run the experiments, write results/*.csv
-analysis/plot_phase{2..6}.py       read the CSVs, print the tables, write results/*.png
+analysis/run_phase{2..7}.py        run the experiments, write results/*.csv
+analysis/plot_phase{2..7}.py       read the CSVs, print the tables, write results/*.png
 data/                              the NSE bhavcopy slice Phase 6 reads (committed, so the
                                    smile can be reproduced without re-downloading)
+docs/phase7_preregistration.md     Phase 7's test cases, references and pass rule, fixed in advance
 results/                           experiment CSVs and charts (committed, so the write-up can cite them)
 requirements.txt                   numpy, scipy, matplotlib, pytest
 pytest.ini                         puts src/ on the import path
@@ -551,6 +772,8 @@ Exercise style: European for Black-Scholes, Monte Carlo and the variance-reduced
 estimators; the binomial tree prices **both European and American** exercise, which is what makes
 the American early-exercise premium in Phase 2 measurable. Nifty 50 index options are European
 too, which is what lets Phase 6 invert the closed form directly.
+Phase 7 adds American exercise by simulation (Longstaff-Schwartz); strictly it prices a Bermudan
+option exercisable on the simulated dates, which is why it is checked against a Bermudan tree too.
 
 Phase 6 reads `data/nifty_fo_bhavcopy_20261116.csv`, which is committed, so the smile reproduces
 without network access. `python analysis/fetch_phase6_data.py <YYYY-MM-DD>` fetches another
