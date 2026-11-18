@@ -6,6 +6,7 @@ settings, against the reference values written down before any LSM price was
 computed.
 """
 
+import dataclasses
 import math
 
 import numpy as np
@@ -13,7 +14,11 @@ import pytest
 
 from pricing.binomial import american_binomial, european_binomial
 from pricing.black_scholes import price as black_scholes
-from pricing.exercise_tree import bermudan_binomial, tree_exercise_boundary
+from pricing.exercise_tree import (
+    bermudan_binomial,
+    bermudan_exercise_boundary,
+    tree_exercise_boundary,
+)
 from pricing.lsm import (
     ExerciseRule,
     apply_exercise_rule,
@@ -164,6 +169,41 @@ class TestTreeBoundary:
         assert np.isnan(boundary).all()
 
 
+class TestBermudanBoundary:
+    def test_one_step_per_date_is_the_american_tree(self):
+        times, berm = bermudan_exercise_boundary(36.0, K, R, 0.2, 1.0, 200, 1, "put")
+        tree_t, tree_b = tree_exercise_boundary(36.0, K, R, 0.2, 1.0, 200, "put")
+        np.testing.assert_allclose(times, tree_t)
+        np.testing.assert_array_equal(berm, tree_b)
+
+    def test_dates_match_the_lsm_rule(self):
+        times, berm = bermudan_exercise_boundary(36.0, K, R, 0.2, 1.0, 50, 20, "put")
+        assert times.size == 49
+        np.testing.assert_allclose(times, np.arange(1, 50) / 50)
+
+    @pytest.mark.parametrize("sigma", [0.2, 0.4])
+    def test_sits_above_the_american_boundary(self, sigma):
+        # Same lattice (50 dates x 40 steps = 2000 steps), so the nodes are
+        # identical. Holding a Bermudan is worth less at every node, so the
+        # exercise region can only be larger: the put boundary is never lower.
+        times, berm = bermudan_exercise_boundary(36.0, K, R, sigma, 1.0, 50, 40, "put")
+        tree_t, tree_b = tree_exercise_boundary(36.0, K, R, sigma, 1.0, 2000, "put")
+        at_dates = tree_b[40 * np.arange(1, 50) - 1]
+        both = np.isfinite(berm) & np.isfinite(at_dates)
+        assert both.sum() > 40
+        assert (berm[both] >= at_dates[both]).all()
+        assert (berm[both] < K).all()
+        assert np.mean(berm[both] - at_dates[both]) > 0.2
+
+    def test_call_has_no_boundary_without_dividends(self):
+        _, boundary = bermudan_exercise_boundary(40.0, K, R, 0.2, 1.0, 50, 10, "call")
+        assert np.isnan(boundary).all()
+
+    def test_rejects_bad_inputs(self):
+        with pytest.raises(ValueError):
+            bermudan_exercise_boundary(36.0, K, R, 0.2, 1.0, 50, 0, "put")
+
+
 # ---------------------------------------------------------------------------
 # LSM mechanics
 # ---------------------------------------------------------------------------
@@ -240,6 +280,29 @@ class TestLSMMechanics:
         assert res.price == 20.0 and res.standard_error == 0.0
         assert american_binomial(20.0, K, R, 0.2, 1.0, 1000, "put") == pytest.approx(20.0)
 
+    def test_time_zero_decision_is_made_on_the_training_paths(self):
+        rule, cash = fit_exercise_rule(20.0, K, R, 0.2, 1.0, "put", 5_000, 50,
+                                       np.random.default_rng(4))
+        assert rule.exercise_now
+        assert (cash == 20.0).all()
+        # The pricing paths only follow the rule: they cannot overturn it.
+        priced = apply_exercise_rule(rule, 1_000, np.random.default_rng(5))
+        assert (priced == 20.0).all()
+        # Without the time-0 exercise the same rule is simulated, and is worth less.
+        held = apply_exercise_rule(dataclasses.replace(rule, exercise_now=False),
+                                   1_000, np.random.default_rng(5))
+        assert held.std() > 0 and held.mean() < 20.0
+
+    def test_holds_at_time_zero_when_waiting_is_worth_more(self):
+        res = lsm_price(36.0, K, R, 0.2, 1.0, "put", n_paths=5_000, seed=1)
+        assert not res.exercise_now and not res.rule.exercise_now
+        assert res.standard_error > 0
+
+    def test_str_reports_the_confidence_level_used(self):
+        res = lsm_price(36.0, K, R, 0.2, 1.0, "put", n_paths=2_000, seed=1, confidence=0.9)
+        assert "90% CI" in str(res)
+        assert "95% CI" in str(lsm_price(36.0, K, R, 0.2, 1.0, "put", n_paths=2_000, seed=1))
+
     def test_dates_with_too_few_paths_in_the_money_never_exercise(self):
         # Deep out-of-the-money put, few paths and a short life: early dates
         # have almost nothing in the money to regress on.
@@ -281,6 +344,14 @@ class TestLSMBoundary:
         tree_at_dates = np.interp(times, tree_t, tree_b)
         middle = slice(10, 40)
         assert np.nanmax(np.abs(boundary[middle] - tree_at_dates[middle])) < 1.0
+
+    def test_boundary_is_close_to_the_bermudan_tree_mid_year(self):
+        # The like-for-like curve: the tree that exercises on the same 50 dates.
+        res = lsm_price(36.0, K, R, 0.2, 1.0, "put", n_paths=100_000, seed=40_000)
+        _, boundary = lsm_exercise_boundary(res.rule)
+        _, berm = bermudan_exercise_boundary(36.0, K, R, 0.2, 1.0, 50, 100, "put")
+        middle = slice(10, 35)
+        assert np.nanmedian(np.abs(boundary[middle] - berm[middle])) < 0.3
 
 
 # ---------------------------------------------------------------------------

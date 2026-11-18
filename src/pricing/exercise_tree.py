@@ -35,6 +35,13 @@ the lowest such node; without dividends there is none.)
 
 The tree's boundary is a staircase, because node prices are spaced by a
 factor ``u = exp(sigma*sqrt(dt))``. More steps make the stairs finer.
+
+The same split as for the price applies to the boundary. LSM's fitted rule
+can only exercise on its dates, so the right curve to hold it against is the
+boundary of the Bermudan tree on those dates (``bermudan_exercise_boundary``),
+not the American one. Holding a Bermudan option is worth less (fewer chances
+later), so exercising wins over a wider range of prices and its put boundary
+sits *above* the American one.
 """
 
 from __future__ import annotations
@@ -46,7 +53,7 @@ import numpy as np
 from .binomial import crr_parameters
 from .common import CALL, check_kind, payoff, validate_inputs
 
-__all__ = ["bermudan_binomial", "tree_exercise_boundary"]
+__all__ = ["bermudan_binomial", "tree_exercise_boundary", "bermudan_exercise_boundary"]
 
 
 def _check_tree_inputs(S, K, r, sigma, T, kind) -> None:
@@ -138,4 +145,49 @@ def tree_exercise_boundary(
             chosen = spots[exercise]
             boundary[step - 1] = chosen.min() if kind == CALL else chosen.max()
         values = np.maximum(continuation, exercise_value)
+    return times, boundary
+
+
+def bermudan_exercise_boundary(
+    S: float,
+    K: float,
+    r: float,
+    sigma: float,
+    T: float,
+    n_dates: int,
+    steps_per_date: int,
+    kind: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The Bermudan tree's critical stock price on each exercise date before expiry.
+
+    Same tree as ``bermudan_binomial``; on each exercise date it records the
+    highest node (lowest, for a call) where exercising is strictly better than
+    holding. Returns ``(times, boundary)`` for dates ``1 .. n_dates - 1``,
+    i.e. ``t = T/n_dates, ..., (n_dates - 1) T/n_dates`` -- the same dates
+    ``lsm.lsm_exercise_boundary`` reports. ``NaN`` where no node is exercised.
+    """
+    _check_tree_inputs(S, K, r, sigma, T, kind)
+    n_dates = _whole("n_dates", n_dates)
+    steps_per_date = _whole("steps_per_date", steps_per_date)
+    steps = n_dates * steps_per_date
+
+    params = crr_parameters(r, sigma, T, steps)
+    p, discount = params["p"], params["discount"]
+    log_u = sigma * math.sqrt(params["dt"])
+
+    times = np.arange(1, n_dates) * (T / n_dates)
+    boundary = np.full(n_dates - 1, np.nan)
+
+    values = payoff(S * np.exp(log_u * (steps - 2 * np.arange(steps + 1))), K, kind)
+    for step in range(steps - 1, 0, -1):
+        values = discount * (p * values[:-1] + (1.0 - p) * values[1:])
+        if step % steps_per_date == 0:              # an exercise date
+            spots = S * np.exp(log_u * (step - 2 * np.arange(step + 1)))
+            exercise_value = payoff(spots, K, kind)
+            exercise = (exercise_value > values) & (exercise_value > 0)
+            if exercise.any():
+                chosen = spots[exercise]
+                boundary[step // steps_per_date - 1] = (
+                    chosen.min() if kind == CALL else chosen.max())
+            values = np.maximum(values, exercise_value)
     return times, boundary

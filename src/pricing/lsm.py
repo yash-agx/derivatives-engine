@@ -33,7 +33,8 @@ Then walk backwards from expiry, one exercise date at a time:
    immediate payoff beats the fitted continuation value, replace the path's
    cash flow with the payoff (the holder exercises there, so the later cash
    flow never happens);
-3. at time 0, average and discount.
+3. at time 0, average and discount: that average is the value of holding,
+   and the holder exercises immediately instead if the payoff now beats it.
 
 Three design choices, and why
 -----------------------------
@@ -181,6 +182,10 @@ class ExerciseRule:
 
     ``coefficients[m]`` is ``None`` on a date where too few paths were in the
     money to fit the regression; the rule then never exercises early there.
+    ``exercise_now`` is the decision at ``t = 0``, made on the training paths
+    like every other decision: every path starts at the same ``S``, so the
+    regression there is just the training paths' mean, and the rule exercises
+    immediately if the payoff beats it.
     ``fit_ranges[m]`` is the span of ``S`` the fit at date ``m`` actually saw,
     because a regression says nothing reliable outside its data. The last
     date is expiry, where no regression is needed (the payoff is the value).
@@ -197,6 +202,7 @@ class ExerciseRule:
     weighted: bool
     coefficients: tuple
     fit_ranges: tuple
+    exercise_now: bool = False
 
     @property
     def dt(self) -> float:
@@ -284,21 +290,36 @@ def fit_exercise_rule(
     degree: int = 3,
     weighted: bool = False,
 ) -> tuple[ExerciseRule, np.ndarray]:
-    """Fit an exercise rule on fresh paths; also return their in-sample cash flows."""
+    """Fit an exercise rule on fresh paths; also return their in-sample cash flows.
+
+    The time-0 decision is part of the rule: exercise now if the payoff beats
+    the training paths' mean discounted cash flow (the in-sample value of
+    holding). If it does, every training path's cash flow is that payoff.
+    """
     _check(S, K, r, sigma, T, kind, n_dates, degree, n_paths)
     paths = simulate_paths(S, r, sigma, T, int(n_dates), int(n_paths), rng)
     cash, coefficients, fit_ranges = _backward_sweep(
         paths, K, r, T / n_dates, kind, int(degree), weighted)
+    immediate = float(payoff(S, K, kind))
+    exercise_now = immediate > float(cash.mean())
+    if exercise_now:
+        cash = np.full_like(cash, immediate)
     rule = ExerciseRule(S, K, r, sigma, T, kind, int(n_dates), int(degree),
-                        weighted, coefficients, fit_ranges)
+                        weighted, coefficients, fit_ranges, exercise_now)
     return rule, cash
 
 
 def apply_exercise_rule(rule: ExerciseRule, n_paths: int,
                         rng: np.random.Generator) -> np.ndarray:
-    """Discounted cash flows from following a *fixed* rule on new paths."""
+    """Discounted cash flows from following a *fixed* rule on new paths.
+
+    If the rule exercises at ``t = 0``, every path pays the payoff now and the
+    simulation is never needed.
+    """
     if int(n_paths) != n_paths or n_paths < 2:
         raise ValueError(f"n_paths must be a whole number >= 2, got {n_paths!r}")
+    if rule.exercise_now:
+        return np.full(int(n_paths), float(payoff(rule.S, rule.K, rule.kind)))
     paths = simulate_paths(rule.S, rule.r, rule.sigma, rule.T, rule.n_dates,
                            int(n_paths), rng)
     cash, _, _ = _backward_sweep(paths, rule.K, rule.r, rule.dt, rule.kind,
@@ -321,9 +342,12 @@ class LSMResult:
     is; its standard error is the naive ``s / sqrt(N)`` and is only
     indicative, because those cash flows all depend on a rule fitted to them.
 
-    ``exercise_now`` is ``True`` when the immediate payoff beat the estimated
-    value of holding, in which case both prices are the payoff, with zero
-    standard error: the holder exercises at time 0 and nothing is uncertain.
+    ``exercise_now`` is ``True`` when the rule exercises at time 0 -- decided
+    on the training paths, never on the pricing paths. Both prices are then
+    the payoff with zero standard error, which is honest: the strategy
+    "exercise now" pays exactly that amount. (Deciding on the pricing paths'
+    mean instead would let their noise choose the strategy, and near the
+    critical spot report a zero-width interval around the wrong number.)
     """
 
     price: float
@@ -353,7 +377,7 @@ class LSMResult:
     def __str__(self) -> str:
         return (
             f"{self.price:.4f} +/- {self.standard_error:.4f} (se), "
-            f"95% CI [{self.ci_low:.4f}, {self.ci_high:.4f}]; in-sample "
+            f"{self.confidence:.0%} CI [{self.ci_low:.4f}, {self.ci_high:.4f}]; in-sample "
             f"{self.in_sample_price:.4f}; {self.n_dates} dates, degree {self.degree}"
         )
 
@@ -398,14 +422,6 @@ def lsm_price(
     in_sample = float(train_cash.mean())
     in_sample_se = float(train_cash.std(ddof=1) / math.sqrt(train_cash.size))
 
-    # Time 0 is an exercise opportunity too. If the payoff right now beats
-    # the estimated value of waiting, the holder takes it.
-    immediate = float(payoff(S, K, kind))
-    exercise_now = immediate > price
-    if exercise_now:
-        price, se = immediate, 0.0
-        in_sample, in_sample_se = max(immediate, in_sample), 0.0
-
     half_width = critical_value(confidence) * se
     return LSMResult(
         price=price,
@@ -421,7 +437,7 @@ def lsm_price(
         weighted=weighted,
         seed=seed,
         rule=rule,
-        exercise_now=exercise_now,
+        exercise_now=rule.exercise_now,
         confidence=confidence,
     )
 
