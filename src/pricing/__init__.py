@@ -5,4 +5,6 @@
 - ``binomial``      Phase 2: Cox-Ross-Rubinstein tree, European and American
 - ``monte_carlo``   Phase 2: simulation under geometric Brownian motion
 - ``implied_vol``   Phase 6: inverts Black-Scholes for sigma, given a market price
+- ``lsm``           Phase 7: American options by Longstaff-Schwartz regression
+- ``exercise_tree`` Phase 7: Bermudan tree and the tree's exercise boundary
 """
