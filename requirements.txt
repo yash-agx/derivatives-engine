@@ -4,3 +4,4 @@ numpy>=1.26
 scipy>=1.11
 matplotlib>=3.8
 pytest>=8.0
+QuantLib>=1.44      # Phase 8 validation only; its tests skip if it is missing

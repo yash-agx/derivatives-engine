@@ -1,0 +1,8 @@
+method,n_options,max_abs_error,max_rel_error,mean_abs_error,mean_z,max_abs_z
+european_analytic,54,2.665e-14,7.373e-13,7.158e-15,,
+binomial_crr_500,54,1.316e-03,7.026e-05,1.813e-04,,
+crr_linearised_p_500,54,2.872e-11,2.100e-12,6.006e-12,,
+fd_european_vs_bs,54,1.432e-04,5.811e-05,2.097e-05,,
+american_tree_10000_vs_fd,54,7.499e-04,8.015e-04,1.450e-04,,
+lsm_put_vs_fd,27,2.431e-02,1.317e-01,1.164e-02,-0.609,2.787
+implied_vol_nse,417,2.260e-13,1.426e-12,2.994e-14,,

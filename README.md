@@ -20,10 +20,12 @@ Phase 5.
 | 5 | C++ Monte Carlo core; Python vs NumPy vs C++ benchmarks | **done** |
 | 6 | Implied volatility and the Nifty 50 smile, on real NSE data | **done** |
 | 7 | American options by Longstaff-Schwartz Monte Carlo, validated against the tree | **done** |
+| 8 | Validation against QuantLib, an independent implementation | **done** |
 
-4,742 tests pass (plus one pre-registered miss kept as a strict expected failure) across the
-models, the harness, the variance-reduced estimators, the C++ engine, the implied-volatility
-solver and the Longstaff-Schwartz pricer.
+4,910 tests pass (plus two strict expected failures: Phase 7's pre-registered miss and Phase 8's
+binomial convention gap) across the models, the harness, the variance-reduced estimators, the
+C++ engine, the implied-volatility solver, the Longstaff-Schwartz pricer and the QuantLib
+comparison.
 
 **Phase 1** — `call_price`, `put_price` and `delta`/`gamma`/`vega`/`theta`/`rho` for both option
 types: Hull's worked examples, put-call parity, every Greek against a central finite difference,
@@ -749,6 +751,52 @@ close to expiry: one date out, the true advantage of waiting, interest on the st
 - **The convergence sweeps reuse seeds.** The same seeds run at every path count, date count and
   degree, so their rows are correlated. 20 seeds per point resolves coverage only to about ±0.05.
 
+## Phase 8: Validation against QuantLib
+
+`python analysis/run_phase8_quantlib.py` (~4 min) writes `results/quantlib_parity.csv`. The grid is
+S ∈ {80, 100, 120}, K = 100, T ∈ {0.25, 1, 2}, σ ∈ {0.15, 0.3, 0.5}, r = 5%, q = 0, calls and
+puts (54 options, 27 puts), on QuantLib 1.44. Time is laid on QuantLib's date axis exactly: the grid
+uses Actual/360 (90, 360 and 720 whole days), and the NSE quotes use their integer days over 365.
+
+| comparison | n | max abs error | max rel error | mean abs error |
+|---|---|---|---|---|
+| Black-Scholes vs `AnalyticEuropeanEngine` | 54 | 2.7e-14 | 7.4e-13 | 7.2e-15 |
+| CRR tree, American, 500 steps vs `BinomialVanillaEngine("crr", 500)` | 54 | **1.3e-3** | 7.0e-5 | 1.8e-4 |
+| ↳ the same tree with QuantLib's up-probability (diagnostic) | 54 | 2.9e-11 | 2.1e-12 | 6.0e-12 |
+| QuantLib FD on Europeans vs Black-Scholes (the reference's own error) | 54 | 1.4e-4 | 5.8e-5 | 2.1e-5 |
+| CRR tree, American, 10,000 steps vs `FdBlackScholesVanillaEngine` (20,000 × 2,000) | 54 | 7.5e-4 | 8.0e-4 | 1.5e-4 |
+| Longstaff-Schwartz put (100k paths, 50 dates) vs FD | 27 | 2.4e-2 | 1.3e-1 | 1.2e-2 |
+| Implied volatility, 417 NSE quotes, vs `impliedVolatility()` | 417 | 2.3e-13 | 1.4e-12 | 3.0e-14 |
+
+LSM against FD in standard errors: **mean z = −0.61, max |z| = 2.79** over the 24 puts with a
+non-zero standard error; the other 3 exercise at t = 0 and equal K − S exactly on both sides.
+
+**What it shows:** wherever both sides compute the same quantity, the engine agrees with an
+independent library to rounding error (1e-11 or better). Every remaining gap is a stated
+discretisation or estimator error of the right size and sign.
+
+What does not match, and why:
+- **The binomial tree misses the 1e-6 target by three orders of magnitude.** That is not a bug.
+  QuantLib's "crr" tree uses the *linearised* up-probability `p = ½ + ½(r − σ²/2)·dt/dx`; this
+  engine uses the exact no-arbitrage one `p = (e^{r·dt} − d)/(u − d)`. Both are first-order
+  approximations with the same limit, so prices differ by O(1/N). Re-running this engine's own
+  backward induction with QuantLib's `p` reproduces QuantLib to 2.9e-11 on all 54 options, which
+  pins the entire gap on that one line. The 1e-6 requirement is kept in the tests as a strict
+  expected failure rather than relaxed.
+- **The 10,000-step tree against FD (7.5e-4) is the tree's own error.** The worst case is an
+  at-the-money two-year call at σ = 0.5, where early exercise never binds: the tree is 6.6e-4 below
+  Black-Scholes and FD is 8.7e-5 above it. FD's American error is set by its time grid, because it
+  only checks exercise on time steps and so is itself a Bermudan with that many dates. Going from
+  1,600 to 6,400 time steps moved one put by 2.9e-4, which is why the time grid is 10× the space
+  grid.
+- **LSM sits systematically below the American value**: 22 of the 24 finite z-scores are negative.
+  That is expected, for two reasons. It prices a Bermudan with 50 dates, and an out-of-sample price
+  under any fitted rule is a lower bound up to noise. This is the Phase 7 finding again, against an
+  independent reference (mean z −0.65 there). The worst case, z = −2.79, is the cheapest put on the
+  grid (S = 120, T = 0.25, σ = 0.15, worth 0.012), where few paths are in the money to regress on.
+  The 3-standard-error tolerance in the tests was set *after* seeing that value, so it is a
+  regression guard, not an independent pass.
+
 ## Layout
 
 ```
@@ -767,12 +815,13 @@ tests/                             pytest suite (textbook values, parity, finite
                                    edge cases, CI coverage, calibrated fake estimators)
 analysis/fetch_phase6_data.py      downloads one day's NSE F&O bhavcopy, keeps the NIFTY rows
 analysis/run_phase{2..7}.py        run the experiments, write results/*.csv
+analysis/run_phase8_quantlib.py    the same options priced in QuantLib; writes results/quantlib_parity.csv
 analysis/plot_phase{2..7}.py       read the CSVs, print the tables, write results/*.png
 data/                              the NSE bhavcopy slice Phase 6 reads (committed, so the
                                    smile can be reproduced without re-downloading)
 docs/phase7_preregistration.md     Phase 7's test cases, references and pass rule, fixed in advance
 results/                           experiment CSVs and charts (committed, so the write-up can cite them)
-requirements.txt                   numpy, scipy, matplotlib, pytest
+requirements.txt                   numpy, scipy, matplotlib, pytest, QuantLib (Phase 8 only)
 pytest.ini                         puts src/ on the import path
 ```
 
